@@ -625,15 +625,12 @@ component displayName="Preside Object Service" {
 		transaction {
 			if ( requiresVersioning ) {
 				versionNumber = _getVersioningService().saveVersionForUpdate(
-					  objectName           = arguments.objectName
-					, id                   = arguments.id ?: NullValue()
-					, filter               = preparedFilter.filter
-					, filterParams         = preparedFilter.filterParams
-					, data                 = cleanedData
-					, manyToManyData       = manyToManyData
-					, isDraft              = arguments.isDraft
-					, versionNumber        = arguments.versionNumber ? arguments.versionNumber : getNextVersionNumber()
-					, forceVersionCreation = arguments.forceVersionCreation
+					  argumentCollection = arguments
+					, filter             = preparedFilter.filter
+					, filterParams       = preparedFilter.filterParams
+					, data               = cleanedData
+					, manyToManyData     = manyToManyData
+					, versionNumber      = arguments.versionNumber ? arguments.versionNumber : getNextVersionNumber()
 				);
 			} else if ( objectIsVersioned( arguments.objectName ) && Len( Trim( arguments.id ?: "" ) ) ) {
 				_getVersioningService().updateLatestVersionWithNonVersionedChanges(
@@ -2371,7 +2368,7 @@ component displayName="Preside Object Service" {
 		var having     = arguments.preparedFilter.having ?: "";
 		var key        = "";
 		var cache      = _getCache();
-		var cacheKey   = _removeDynamicElementsFromForeignObjectsCacheKey( "Detected foreign objects for generated SQL. Obj: #arguments.objectName#. Data: #StructKeyList( arguments.data )#. Fields: #ArrayToList( arguments.selectFields )#. Order by: #arguments.orderBy#. Filter: #IsStruct( filter ) ? StructKeyList( filter ) : filter#. Having: #having#" );
+		var cacheKey   = _generateForeignObjectsCacheKey( argumentCollection=arguments );
 		var objects    = cache.get( cacheKey );
 
 		if ( !IsNull( local.objects ) ) {
@@ -2403,7 +2400,7 @@ component displayName="Preside Object Service" {
 			}
 		};
 
-		objects = {}
+		objects = {};
 
 		if ( IsStruct( filter ) ) {
 			StructAppend( all, filter );
@@ -2453,6 +2450,33 @@ component displayName="Preside Object Service" {
 		}
 
 		return objects;
+	}
+
+	private string function _generateForeignObjectsCacheKey(
+		  required string objectName
+		,          struct preparedFilter = {}
+		,          struct data           = {}
+		,          array  selectFields   = []
+		,          string orderBy        = ""
+		,          array  extraJoins     = []
+		,          array  extraFilters   = []
+	) {
+		var filter   = arguments.preparedFilter.filter ?: "";
+		var having   = arguments.preparedFilter.having ?: "";
+		var cacheKey = "Detected foreign objects for generated SQL. Obj: #arguments.objectName#. Data: #StructKeyList( arguments.data )#. Fields: #ArrayToList( arguments.selectFields )#. Order by: #arguments.orderBy#. Filter: #IsStruct( filter ) ? StructKeyList( filter ) : filter#. Having: #having#";
+
+		for( var join in extraJoins ) {
+			cacheKey &= " ExtraJoins: #( join.joinToTable ?: '' )#.#( join.joinToColumn ?: '' )#";
+		}
+		for( var extraFilter in extraFilters ) {
+			if ( IsArray( extraFilter.extraJoins ?: "" ) ) {
+				for( var join in extraFilter.extraJoins ) {
+					cacheKey &= "#( join.joinToTable ?: '' )#.#( join.joinToColumn ?: '' )#";
+				}
+			}
+		}
+
+		return hash( _removeDynamicElementsFromForeignObjectsCacheKey( cacheKey ) );
 	}
 
 	private string function _removeDynamicElementsFromForeignObjectsCacheKey( required string cacheKey ) {

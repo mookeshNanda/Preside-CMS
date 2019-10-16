@@ -224,7 +224,14 @@ component {
 		}
 
 		return _getPobj().selectData(
-			  selectFields       = [ "page.id as value", "page.title as text", "parent_page.title as parent", "page._hierarchy_depth as depth", "page.page_type" ]
+			  selectFields       = [ 
+				    "page.id as value"
+				  , "page.title as text"
+				  , "parent_page.title as parent"
+				  , "page._hierarchy_depth as depth"
+				  , "page.page_type"
+				  , "page.active as active" 
+			  ]
 			, filter             = filter
 			, extraFilters       = extra
 			, maxRows            = arguments.maxRows
@@ -487,7 +494,6 @@ component {
 		, numeric version           = 0
 		, string  site              = ""
 	) {
-		var loginSvc       = _getLoginService();
 		var homepageArgs   = {
 			  maxRows            = 1
 			, orderBy            = "_hierarchy_sort_order"
@@ -518,6 +524,7 @@ component {
 			return homepage;
 		}
 
+		var loginSvc = _getLoginService();
 		homepage = addPage(
 			  title         = "Home"
 			, slug          = ""
@@ -1416,6 +1423,7 @@ component {
 			, allowDraftVersions = true
 			, filter             = filter
 			, bypassTenants      = bypassTenants
+			, useCache           = false
 		);
 
 		return IsNull( qry.max_id ) ? 1 : Val( qry.max_id ) + 1;

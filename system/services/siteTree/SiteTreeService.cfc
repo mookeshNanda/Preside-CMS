@@ -224,13 +224,13 @@ component {
 		}
 
 		return _getPobj().selectData(
-			  selectFields       = [ 
+			  selectFields       = [
 				    "page.id as value"
 				  , "page.title as text"
 				  , "parent_page.title as parent"
 				  , "page._hierarchy_depth as depth"
 				  , "page.page_type"
-				  , "page.active as active" 
+				  , "page.active as active"
 			  ]
 			, filter             = filter
 			, extraFilters       = extra
@@ -302,9 +302,10 @@ component {
 			if ( Len( Trim( sourceObject ) ) ) {
 				if ( poService.isManyToManyProperty( sourceObject, arguments.propertyName ) ) {
 					var relatedRecords = poService.selectManyToManyData(
-						  objectName   = sourceObject
-						, propertyName = arguments.propertyName
-						, filter       = ( sourceObject == "page" ? { id = arguments.page.id } : { page = arguments.page.id } )
+						  objectName       = sourceObject
+						, propertyName     = arguments.propertyName
+						, filter           = ( sourceObject == "page" ? { id = arguments.page.id } : { page = arguments.page.id } )
+						, fromVersionTable = $getRequestContext().showNonLiveContent()
 					);
 
 					if ( relatedRecords.recordCount ) {
@@ -1160,7 +1161,7 @@ component {
 	public boolean function userHasPageAccess( required string pageId ) {
 		var restrictionRules = getAccessRestrictionRulesForPage( arguments.pageId );
 
-		if ( [ "none", "partial" ].find( restrictionRules.access_restriction ) ) {
+		if ( [ "none" ].find( restrictionRules.access_restriction ) ) {
 			return true;
 		}
 
@@ -1382,7 +1383,22 @@ component {
 			}
 		}
 
+		_unsetPageRestrictFields( data );
+
 		return data;
+	}
+
+	private void function _unsetPageRestrictFields( required struct data ) {
+		var data           = arguments.data;
+		var restrictFields = [ "access_condition", "full_login_required", "grantaccess_to_all_logged_in_users", "exclude_from_navigation_when_restricted" ];
+
+		if( StructKeyExists( data, "access_restriction" ) && data.access_restriction == "none" ) {
+			for ( var field in restrictFields ) {
+				if( StructKeyExists( data, field ) ) {
+					data[ field ] = "";
+				}
+			}
+		}
 	}
 
 	private array function _treeQueryToNestedArray( required query treeQuery, any rootPage ) {
@@ -1502,7 +1518,7 @@ component {
 		var addPageArgs = {
 			  title                   = _getI18nService().translateResource( uri=pageType.getName(), defaultValue=pageType.getid() )
 			, page_type               = pageType.getId()
-			, slug                    = pageType.getId() == "homepage" ? "" : LCase( ReReplace( pageType.getId(), "[\W_]", "-", "all" ) )
+			, slug                    = pageType.getDefaultSystemPageSlug()
 			, active                  = 1
 			, userId                  = ( loginSvc.isLoggedIn() ? loginSvc.getLoggedInUserId() : loginSvc.getSystemUserId() )
 			, exclude_from_navigation = pageType.getId() != "homepage"

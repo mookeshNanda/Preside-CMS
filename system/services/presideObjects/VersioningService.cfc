@@ -82,26 +82,23 @@ component {
 		,          boolean isDraft              = false
 	) {
 		var poService         = $getPresideObjectService();
-		var newData           = Duplicate( arguments.data );
 		var idField           = poService.getidField( arguments.objectName );
 		var dateCreatedField  = poService.getdateCreatedField( arguments.objectName );
 		var dateModifiedField = poService.getdateModifiedField( arguments.objectName );
 
-		newData.delete( dateCreatedField  );
-		newData.delete( dateModifiedField );
-
 		for( var oldData in existingRecords ) {
 			var versionedManyToManyFields = getVersionedManyToManyFieldsForObject( arguments.objectName );
 			var oldManyToManyData = versionedManyToManyFields.len() ? poService.getDeNormalizedManyToManyData(
-				  objectName   = arguments.objectName
-				, id           = oldData[ idField ]
-				, selectFields = versionedManyToManyFields
+				  objectName       = arguments.objectName
+				, id               = oldData[ idField ]
+				, selectFields     = versionedManyToManyFields
+				, fromVersionTable = arguments.isDraft
 			) : {};
 			var prevVersionsExist = poService.dataExists(
 				  objectName         = arguments.objectName
 				, id                 = oldData.id
 				, fromVersionTable   = true
-				, allowDraftVersions = true
+				, allowDraftVersions = objectUsesDrafts( arguments.objectName )
 			);
 
 			if ( !prevVersionsExist ) {
@@ -111,6 +108,7 @@ component {
 					, data           = oldData
 					, manyToManyData = oldManyToManyData
 					, versionNumber  = arguments.versionNumber
+					, isDraft        = arguments.isDraft
 				);
 
 				arguments.versionNumber = getNextVersionNumber();
@@ -171,21 +169,29 @@ component {
 		var idField           = poService.getIdField( arguments.objectName );
 		var versionedData     = Duplicate( arguments.data );
 		var recordId          = versionedData[ idField ] ?: "";
+		var useDrafts         = objectUsesDrafts( arguments.objectName );
 
 		versionedData._version_number          = arguments.versionNumber;
 		versionedData._version_author          = arguments.versionAuthor;
-		versionedData._version_is_draft        = versionedData._version_has_drafts = arguments.isDraft;
 		versionedData._version_changed_fields  = ',' & arguments.changedFields.toList() & ",";
 		versionedData._version_is_latest       = !arguments.isDraft;
-		versionedData._version_is_latest_draft = true;
+
+		if ( useDrafts ) {
+			versionedData._version_is_draft        = versionedData._version_has_drafts = arguments.isDraft;
+			versionedData._version_is_latest_draft = true;
+		}
 
 		if ( poService.fieldExists( versionObjectName, idField ) ) {
 			versionedData[ idField ] = versionedData[ idField ] ?: NullValue();
 		}
 
 		if ( Len( Trim( versionedData[ idField ] ?: "" ) ) ) {
-			var cleanLatestData = { _version_is_latest_draft=false };
-			if ( !arguments.isDraft ) {
+			var cleanLatestData = {};
+
+			if ( useDrafts ) {
+			 	cleanLatestData._version_is_latest_draft = false;
+			}
+			if ( !useDrafts || !arguments.isDraft ) {
 				cleanLatestData._version_is_latest = false;
 			}
 
@@ -205,6 +211,7 @@ component {
 			, insertManyToManyRecords = false
 			, useVersioning           = false
 			, skipTrivialInterceptors = true
+			, isDraft                 = arguments.isDraft
 		);
 
 		for( var propertyName in manyToManyData ){
@@ -222,6 +229,7 @@ component {
 					, values           = manyToManyData[ propertyName ]
 					, versionNumber    = arguments.versionNumber
 					, versionAuthor    = arguments.versionAuthor
+					, isDraft          = arguments.isDraft
 				);
 			} else if ( relationship == "one-to-many" && poService.isOneToManyConfiguratorObject( arguments.objectName, propertyName ) ) {
 				_saveOneToManyConfiguratorVersion(
@@ -246,12 +254,19 @@ component {
 		var poService         = $getPresideObjectService();
 		var versionObjectName = poService.getVersionObjectName( arguments.objectName );
 		var idField           = poService.getIdField( arguments.objectName );
-		var filter            = "#idField# = :#idField# and ( _version_is_latest = :_version_is_latest or _version_is_latest_draft = :_version_is_latest_draft )"
+		var useDrafts         = objectUsesDrafts( arguments.objectName );
+		var filter            = "#idField# = :#idField#";
 		var filterParams      = {
 			  "#idField#"              = arguments.recordId
 			, _version_is_latest       = true
-			, _version_is_latest_draft = true
 		};
+
+		if ( useDrafts ) {
+			filter &= " and ( _version_is_latest = :_version_is_latest or _version_is_latest_draft = :_version_is_latest_draft )";
+			filterParams._version_is_latest_draft = true;
+		} else {
+			filter &= " and _version_is_latest = :_version_is_latest";
+		}
 
 		poService.updateData(
 			  objectName              = versionObjectName
@@ -314,7 +329,7 @@ component {
 						changedFields.append( field );
 					}
 				} else if ( propDbType == "varchar" || propDbType == "text" ){
-					if ( trim( oldData[ field ] ?: "" ) != trim( arguments.newData[ field ] ?: "" ) ){
+					if ( compare( trim( oldData[ field ] ?: "" ), trim( arguments.newData[ field ] ?: "" ) ) != 0 ){
 						changedFields.append( field );
 					}
 				} else if ( propDbType == "int" || propDbType == "float" ){
@@ -350,7 +365,7 @@ component {
 			arguments.filterParams = {};
 		}
 
-		if ( arguments.publishedOnly ) {
+		if ( arguments.publishedOnly && objectUsesDrafts( arguments.objectName ) ) {
 			extraFilters.append( { filter="_version_is_draft is null or _version_is_draft = '0'" } );
 		}
 
@@ -367,6 +382,10 @@ component {
 	}
 
 	public array function getDraftChangedFields( required string objectName, required string recordId ) {
+		if ( !objectUsesDrafts( arguments.objectName ) ) {
+			return [];
+		}
+
 		var versionObjectName = $getPresideObjectService().getVersionObjectName( arguments.objectName );
 		var idField           = $getPresideObjectService().getIdField( arguments.objectName );
 		var latestPublished   = getLatestVersionNumber(
@@ -463,6 +482,12 @@ component {
 		return false;
 	}
 
+	public boolean function objectUsesDrafts( required string objectName ) {
+		var useDrafts = $getPresideObjectService().getObjectAttribute( arguments.objectName, "useDrafts" );
+
+		return IsBoolean( useDrafts ) && useDrafts;
+	}
+
 // PRIVATE HELPERS
 	private void function _removeUniqueIndexes( required struct objMeta ) {
 		for( var ixName in objMeta.indexes ) {
@@ -481,6 +506,8 @@ component {
 
 	private void function _addAdditionalVersioningPropertiesToVersionObject( required struct objMeta, required string versionedObjectName, required string originalObjectName ) {
 		var idField = objMeta.idField ?: "id";
+		var useDrafts = IsBoolean( objMeta.useDrafts ?: "" ) && objMeta.useDrafts;
+
 		if ( StructKeyExists( objMeta.properties, idField ) ) {
 			if ( ( objMeta.properties[ idField ].generator ?: "" ) == "increment" && ( objMeta.versionOnInsert ?: true ) ) {
 				throw( type="VersioningService.pkLimitiation", message="We currently cannot version objects with an auto incrementing id UNLESS you set @versionOnInsert to false on the object CFC definition.", detail="Please either use the default UUID generator for the id, set versionOnInsert=false or turn versioning off on the object with versioned=false" );
@@ -533,36 +560,6 @@ component {
 			, generator    = "none"
 		} );
 
-		objMeta.properties[ "_version_is_draft" ] = objMeta.properties[ "_version_is_draft" ] ?: {};
-		objMeta.properties[ "_version_is_draft" ].append( {
-			  name         = "_version_is_draft"
-			, required     = false
-			, type         = "boolean"
-			, dbtype       = "boolean"
-			, indexes      = ""
-			, control      = "none"
-			, maxLength    = 0
-			, relationship = "none"
-			, relatedto    = "none"
-			, generator    = "none"
-			, default      = false
-		} );
-
-		objMeta.properties[ "_version_has_drafts" ] = objMeta.properties[ "_version_has_drafts" ] ?: {};
-		objMeta.properties[ "_version_has_drafts" ].append( {
-			  name         = "_version_has_drafts"
-			, required     = false
-			, type         = "boolean"
-			, dbtype       = "boolean"
-			, indexes      = ""
-			, control      = "none"
-			, maxLength    = 0
-			, relationship = "none"
-			, relatedto    = "none"
-			, generator    = "none"
-			, default      = false
-		} );
-
 		objMeta.properties[ "_version_is_latest" ] = objMeta.properties[ "_version_is_latest" ] ?: {};
 		objMeta.properties[ "_version_is_latest" ].append( {
 			  name         = "_version_is_latest"
@@ -578,23 +575,55 @@ component {
 			, default      = false
 		} );
 
-		objMeta.properties[ "_version_is_latest_draft" ] = objMeta.properties[ "_version_is_latest_draft" ] ?: {};
-		objMeta.properties[ "_version_is_latest_draft" ].append( {
-			  name         = "_version_is_latest_draft"
-			, required     = false
-			, type         = "boolean"
-			, dbtype       = "boolean"
-			, indexes      = ""
-			, control      = "none"
-			, maxLength    = 0
-			, relationship = "none"
-			, relatedto    = "none"
-			, generator    = "none"
-			, default      = false
-		} );
+		if ( useDrafts ) {
+			objMeta.properties[ "_version_is_draft" ] = objMeta.properties[ "_version_is_draft" ] ?: {};
+			objMeta.properties[ "_version_is_draft" ].append( {
+				  name         = "_version_is_draft"
+				, required     = false
+				, type         = "boolean"
+				, dbtype       = "boolean"
+				, indexes      = ""
+				, control      = "none"
+				, maxLength    = 0
+				, relationship = "none"
+				, relatedto    = "none"
+				, generator    = "none"
+				, default      = false
+			} );
 
-		for( var fieldName in [ "_version_number", "_version_author", "_version_changed_fields", "_version_is_draft", "_version_has_drafts", "_version_is_latest", "_version_is_latest_draft" ] ) {
-			if ( !objMeta.dbFieldList.listFindNoCase( fieldName ) ) {
+			objMeta.properties[ "_version_has_drafts" ] = objMeta.properties[ "_version_has_drafts" ] ?: {};
+			objMeta.properties[ "_version_has_drafts" ].append( {
+				  name         = "_version_has_drafts"
+				, required     = false
+				, type         = "boolean"
+				, dbtype       = "boolean"
+				, indexes      = ""
+				, control      = "none"
+				, maxLength    = 0
+				, relationship = "none"
+				, relatedto    = "none"
+				, generator    = "none"
+				, default      = false
+			} );
+
+			objMeta.properties[ "_version_is_latest_draft" ] = objMeta.properties[ "_version_is_latest_draft" ] ?: {};
+			objMeta.properties[ "_version_is_latest_draft" ].append( {
+				  name         = "_version_is_latest_draft"
+				, required     = false
+				, type         = "boolean"
+				, dbtype       = "boolean"
+				, indexes      = ""
+				, control      = "none"
+				, maxLength    = 0
+				, relationship = "none"
+				, relatedto    = "none"
+				, generator    = "none"
+				, default      = false
+			} );
+		}
+
+		for( var fieldName in [ "_version_number", "_version_author", "_version_changed_fields", "_version_is_latest", "_version_is_draft", "_version_has_drafts", "_version_is_latest_draft" ] ) {
+			if ( ( useDrafts || !fieldName.find( "draft" ) ) && !objMeta.dbFieldList.listFindNoCase( fieldName ) ) {
 				objMeta.dbFieldList = objMeta.dbFieldList.listAppend( fieldName );
 			}
 		}
@@ -606,54 +635,62 @@ component {
 		}
 		objMeta.indexes[ "ix_#arguments.versionedObjectName#_version_number" ] = { unique=false, fields="_version_number" };
 		objMeta.indexes[ "ix_#arguments.versionedObjectName#_version_author" ] = { unique=false, fields="_version_author" };
-		objMeta.indexes[ "ix_#arguments.versionedObjectName#_is_draft"       ] = { unique=false, fields="_version_is_draft" };
 		objMeta.indexes[ "ix_#arguments.versionedObjectName#_is_latest"      ] = { unique=false, fields="_version_is_latest" };
-		objMeta.indexes[ "ix_#arguments.versionedObjectName#_is_latest_drft" ] = { unique=false, fields="_version_is_latest_draft" };
+
+		if ( useDrafts ) {
+			objMeta.indexes[ "ix_#arguments.versionedObjectName#_is_draft"       ] = { unique=false, fields="_version_is_draft" };
+			objMeta.indexes[ "ix_#arguments.versionedObjectName#_is_latest_drft" ] = { unique=false, fields="_version_is_latest_draft" };
+		}
+
 		if ( StructKeyExists( objMeta.properties, idField ) ) {
 			objMeta.indexes[ "ix_#arguments.versionedObjectName#_record_id" ] = { unique=false, fields="#idField#,_version_number" };
 		}
 	}
 
 	private void function _addAdditionalVersioningPropertiesToSourceObject( required struct objMeta, required string objectName ) {
-		objMeta.properties[ "_version_is_draft" ] = objMeta.properties[ "_version_is_draft" ] ?: {};
-		objMeta.properties[ "_version_is_draft" ].append( {
-			  name          = "_version_is_draft"
-			, required      = false
-			, type          = "boolean"
-			, dbtype        = "boolean"
-			, indexes       = ""
-			, control       = "none"
-			, maxLength     = 0
-			, relationship  = "none"
-			, relatedto     = "none"
-			, generator     = "none"
-			, default       = false
-			, adminRenderer = "none"
-		} );
-		objMeta.properties[ "_version_has_drafts" ] = objMeta.properties[ "_version_has_drafts" ] ?: {};
-		objMeta.properties[ "_version_has_drafts" ].append( {
-			  name          = "_version_has_drafts"
-			, required      = false
-			, type          = "boolean"
-			, dbtype        = "boolean"
-			, indexes       = ""
-			, control       = "none"
-			, maxLength     = 0
-			, relationship  = "none"
-			, relatedto     = "none"
-			, generator     = "none"
-			, default       = false
-			, adminRenderer = "none"
-		} );
+		var useDrafts = IsBoolean( objMeta.useDrafts ?: "" ) && objMeta.useDrafts;
 
-		for( var fieldName in [ "_version_is_draft", "_version_has_drafts" ] ) {
-			if ( !objMeta.dbFieldList.listFindNoCase( fieldName ) ) {
-				objMeta.dbFieldList = objMeta.dbFieldList.listAppend( fieldName );
+		if ( useDrafts ) {
+			objMeta.properties[ "_version_is_draft" ] = objMeta.properties[ "_version_is_draft" ] ?: {};
+			objMeta.properties[ "_version_is_draft" ].append( {
+				  name          = "_version_is_draft"
+				, required      = false
+				, type          = "boolean"
+				, dbtype        = "boolean"
+				, indexes       = ""
+				, control       = "none"
+				, maxLength     = 0
+				, relationship  = "none"
+				, relatedto     = "none"
+				, generator     = "none"
+				, default       = false
+				, adminRenderer = "none"
+			} );
+			objMeta.properties[ "_version_has_drafts" ] = objMeta.properties[ "_version_has_drafts" ] ?: {};
+			objMeta.properties[ "_version_has_drafts" ].append( {
+				  name          = "_version_has_drafts"
+				, required      = false
+				, type          = "boolean"
+				, dbtype        = "boolean"
+				, indexes       = ""
+				, control       = "none"
+				, maxLength     = 0
+				, relationship  = "none"
+				, relatedto     = "none"
+				, generator     = "none"
+				, default       = false
+				, adminRenderer = "none"
+			} );
+
+			for( var fieldName in [ "_version_is_draft", "_version_has_drafts" ] ) {
+				if ( !objMeta.dbFieldList.listFindNoCase( fieldName ) ) {
+					objMeta.dbFieldList = objMeta.dbFieldList.listAppend( fieldName );
+				}
 			}
-		}
 
-		objMeta.indexes[ "ix_#arguments.objectName#_is_draft" ] = { unique=false, fields="_version_is_draft" };
-		objMeta.indexes[ "ix_#arguments.objectName#_has_drafts" ] = { unique=false, fields="_version_has_drafts" };
+			objMeta.indexes[ "ix_#arguments.objectName#_is_draft" ] = { unique=false, fields="_version_is_draft" };
+			objMeta.indexes[ "ix_#arguments.objectName#_has_drafts" ] = { unique=false, fields="_version_has_drafts" };
+		}
 	}
 
 	private any function _renameTableIndexes( required string indexKey, required string objectName, required string versionedObjectName ) {
@@ -683,6 +720,7 @@ component {
 		, required string  values
 		, required numeric versionNumber
 		, required string  versionAuthor
+		,          boolean isDraft = false
 	) {
 		var poService      = $getPresideObjectService();
 		var prop           = poService.getObjectProperty( arguments.sourceObjectName, arguments.joinPropertyName );
@@ -691,22 +729,51 @@ component {
 		var sourceFk       = prop.relationshipIsSource ? prop.relatedViaSourceFk : prop.relatedViaTargetFk;
 		var targetFk       = prop.relationshipIsSource ? prop.relatedViaTargetFk : prop.relatedViaSourceFk;
 		var versionedPivot = poService.getVersionObjectName( pivotTable );
+		var useDrafts      = objectUsesDrafts( pivotTable );
 		var sortOrder      = 0;
 
 		if ( Len( Trim( versionedPivot ) ) and Len( Trim( targetObject ) ) ) {
 			transaction {
+
+				if( useDrafts && arguments.isDraft ){
+					poService.updateData(
+						  objectName = versionedPivot
+						, filter     = { "#sourceFk#"=arguments.sourceObjectId, _version_is_latest_draft=1 }
+						, data       = {
+							_version_is_latest_draft = 0
+						}
+					);
+				}else{
+					poService.updateData(
+						  objectName = versionedPivot
+						, filter     = { "#sourceFk#"=arguments.sourceObjectId, _version_is_latest=1 }
+						, data       = {
+							_version_is_latest = 0
+						}
+					);
+				}
+
 				var recordsToInsert = ListToArray( arguments.values );
 
 				for( var targetId in recordsToInsert ) {
+					var data = {
+						  "#sourceFk#"    = arguments.sourceObjectId
+						, "#targetFk#"    = targetId
+						, sort_order      = ++sortOrder
+						, _version_number = arguments.versionNumber
+						, _version_author = arguments.versionAuthor
+						, _version_is_latest       = !arguments.isDraft
+					};
+
+					if ( useDrafts ) {
+						data._version_is_draft        = arguments.isDraft;
+						data._version_is_latest_draft = arguments.isDraft;
+					}
+
 					poService.insertData(
 						  objectName = versionedPivot
-						, data       = {
-							  "#sourceFk#"    = arguments.sourceObjectId
-							, "#targetFk#"    = targetId
-							, sort_order      = ++sortOrder
-							, _version_number = arguments.versionNumber
-							, _version_author = arguments.versionAuthor
-						}
+						, data       = data
+						, isDraft    = arguments.isDraft
 					);
 				}
 			}

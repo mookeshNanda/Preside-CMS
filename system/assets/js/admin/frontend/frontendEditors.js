@@ -43,7 +43,7 @@
 				position.height = $after.offset().top - position.top;
 
 				if ( position.height < 25 ) {
-					dummyDivs.push( $( "<div></div>" ).height( 25 - position.height ) );
+					dummyDivs.push( $( "" ).height( 25 - position.height ) );
 					$endComment.before( dummyDivs[ dummyDivs.length-1 ] );
 					position.height = 25;
 				}
@@ -298,6 +298,9 @@
 										} ).fail( commonFailHandler ).always( commonAlwaysHandler );
 									}
 								});
+							} else if ( data.nondraft ) {
+								toggleEditMode( false );
+								$.alert( { message : data.message } );
 							} else {
 								presideBootbox.alert( data.prompt );
 							}
@@ -599,6 +602,5 @@
 		$checkbox.prop( "checked", editMode );
 		setEditMode( editMode );
 	}
-
 
 } )( presideJQuery );

@@ -2,6 +2,7 @@
 	assetId      = rc.asset                  ?: "";
 	asset        = prc.asset                 ?: StructNew();
 	assetType    = prc.assetType             ?: QueryNew( "" );
+	accept       = prc.accept                ?: assetType.mimeType;
 	versions     = prc.versions              ?: QueryNew( "" );
 	isImageAsset = prc.isImageAsset          ?: false;
 	failedQueue  = prc.latestFailedQueueItem ?: QueryNew( '' );
@@ -56,6 +57,13 @@
 			</a>
 		</cfif>
 
+		<a class="pull-right inline" href="#event.buildAdminLink( linkTo="assetmanager.clearAssetDerivativesAction", queryString="asset=#assetId#")#" title="#translateResource( "cms:assetmanager.clear.derivatives.prompt" )#">
+			<button class="btn btn-info btn-sm">
+				<i class="fa fa-redo"></i>
+				#translateResource( uri="cms:assetmanager.clear.derivatives.btn" )#
+			</button>
+		</a>
+
 		<a class="pull-right inline" data-global-key="a" id="upload-button">
 			<button class="btn btn-success btn-sm">
 				<i class="fa fa-cloud-upload"></i>
@@ -67,7 +75,7 @@
 			#renderFormControl(
 				  name    = "file"
 				, type    = "fileupload"
-				, accept  = assetType.mimetype
+				, accept  = accept
 				, context = "admin"
 				, id      = "upload-version-file"
 				, label   = "cms:assetmanager.newversion.form.file.label"

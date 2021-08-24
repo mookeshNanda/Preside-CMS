@@ -9,11 +9,13 @@ component {
 
 // CONSTRUCTOR
 	/**
-	 * @dataExporterReader.inject dataExporterReader
+	 * @dataExporterReader.inject              dataExporterReader
+	 * @dataManagerCustomizationService.inject dataManagerCustomizationService
 	 *
 	 */
-	public any function init( required any dataExporterReader ) {
+	public any function init( required any dataExporterReader, required any dataManagerCustomizationService ) {
 		_setExporters( arguments.dataExporterReader.readExportersFromDirectories() );
+		_setDataManagerCustomizationService( arguments.dataManagerCustomizationService );
 		_setupExporterMap();
 
 		return this;
@@ -41,6 +43,7 @@ component {
 		,          array   selectFields       = []
 		,          numeric exportPagingSize   = 1000
 		,          any     recordsetDecorator = ""
+		,          string  exportFilterString = ""
 		,          string  exportFileName     = ""
 		,          string  orderBy            = ""
 		,          string  mimetype           = ""
@@ -73,12 +76,30 @@ component {
 		selectDataArgs.delete( "meta" );
 		selectDataArgs.delete( "fieldTitles" );
 		selectDataArgs.delete( "exportPagingSize" );
-		selectDataArgs.maxRows     = arguments.exportPagingSize;
-		selectDataArgs.startRow    = 1;
-		selectDataArgs.autoGroupBy = true;
-		selectDataArgs.useCache    = false;
+		selectDataArgs.delete( "exportFilterString" );
+		selectDataArgs.maxRows      = arguments.exportPagingSize;
+		selectDataArgs.startRow     = 1;
+		selectDataArgs.autoGroupBy  = true;
+		selectDataArgs.useCache     = false;
 		selectDataArgs.selectFields = _expandRelationshipFields( arguments.objectname, selectDataArgs.selectFields );
+		selectDataArgs.distinct     = true;
 		selectDataArgs.orderBy      = _getOrderBy( arguments.objectName, arguments.orderBy );
+		selectDataArgs.extraFilters = selectDataArgs.extraFilters ?: [];
+		selectDataArgs.gridFields   = selectDataArgs.gridFields   ?: [];
+
+		if ( len( arguments.exportFilterString ) ) {
+			var rc = $getRequestContext().getCollection();
+			var keyValues = listToArray( arguments.exportFilterString, "&" );
+			for( var keyValue in keyValues ) {
+				rc[ listFirst( keyValue, "=" ) ] = listRest( keyValue, "=" );
+			}
+		}
+
+		_getDataManagerCustomizationService().runCustomization(
+			  objectName = arguments.objectName
+			, action     = "preFetchRecordsForGridListing"
+			, args       = selectDataArgs
+		);
 
 		if ( canReportProgress || canLog ) {
 			var totalRecordsToExport = presideObjectService.selectData(
@@ -211,6 +232,10 @@ component {
 			for( var propId in propertyNames ) {
 				var prop = objectProperties[ propId ];
 
+				if ( IsBoolean( prop.excludeDataExport ?: "" ) && prop.excludeDataExport ) {
+					continue;
+				}
+
 				switch( prop.relationship ?: "" ) {
 					case "one-to-many":
 					case "many-to-many":
@@ -274,19 +299,43 @@ component {
 		return exporters[ arguments.exporterid ] ?: {};
 	}
 
+	/**
+	 * Returns the number of saved exports there are for a given
+	 * object.
+	 *
+	 * @autodoc true
+	 * @objectName.hint The name of the object whose saved export count you wish to get.
+	 */
+	public numeric function getSavedExportCountForObject( required string objectName ) {
+		return $getPresideObject( "saved_export" ).selectData(
+			  filter          = { object_name = arguments.objectName }
+			, selectFields    = [ "1 as record" ]
+			, recordCountOnly = true
+		);
+	}
+
 // PRIVATE HELPERS
 	private array function _expandRelationshipFields(
 		  required string objectName
 		, required array  selectFields
 	) {
 		var props = $getPresideObjectService().getObjectProperties( arguments.objectName );
+		var prop  = {};
 		var i     = 0;
 
 		for( var field in arguments.selectFields ) {
 			i++;
+			prop = props[ field ] ?: {};
 
-			if ( ( props[ field ].relationship ?: "" ) == "many-to-one" ) {
-				arguments.selectFields[ i ] = "#field#.${labelfield} as #field#";
+			switch( prop.relationship ?: "none" ) {
+				case "one-to-many":
+				case "many-to-many":
+					selectFields[ i ] = "'' as " & field;
+				break;
+
+				case "many-to-one":
+					selectFields[ i ] = "#field#.${labelfield} as " & field;
+				break;
 			}
 		}
 
@@ -302,7 +351,7 @@ component {
 		for( var field in arguments.fieldNames ) {
 			arguments.existingTitles[ field ] = arguments.existingTitles[ field ] ?: $translateResource(
 				  uri          = baseUri & "field.#field#.title"
-				, defaultValue = field
+				, defaultValue = $translateResource( uri="cms:preside-objects.default.field.#field#.title", defaultValue=field )
 			);
 		}
 
@@ -316,8 +365,9 @@ component {
 		var objectProperties = $getPresideObjectService().getObjectProperties( arguments.objectName );
 
 		for( var el in orderElements ) {
-			var fieldName = Trim( ListFirst( el, " " ) );
-			var dir = ListLen( el, " " ) > 1 ? LCase( Trim( ListRest( el, " " ) ) ) : "asc";
+			var fieldName         = Trim( ListFirst( el, " " ) );
+			var fieldRelationship = objectProperties[fieldName].relationship ?: "";
+			var dir               = ListLen( el, " " ) > 1 ? LCase( Trim( ListRest( el, " " ) ) ) : "asc";
 
 			if ( !ArrayFind( validDirections, dir ) ) {
 				validatedOrderBy = "";
@@ -327,6 +377,17 @@ component {
 			if ( !StructKeyExists( objectProperties, fieldName ) ) {
 				validatedOrderBy = "";
 				break;
+			}
+
+			if( fieldRelationship == "many-to-one" ){
+				var fieldRelatedTo = objectProperties[fieldName].relatedto ?: "";
+				if( Len( fieldRelatedTo ) ){
+					var fieldRelatedToLabel = $getPresideObjectService().getLabelField( fieldRelatedTo );
+
+					if( Len( fieldRelatedToLabel ) ){
+						validatedOrderBy = replace( validatedOrderBy, fieldName, "#fieldName#.#fieldRelatedToLabel#" );
+					}
+				}
 			}
 		}
 
@@ -346,6 +407,13 @@ component {
 	}
 	private void function _setExporters( required array exporters ) {
 		_exporters = arguments.exporters;
+	}
+
+	private any function _getDataManagerCustomizationService() {
+		return _dataManagerCustomizationService;
+	}
+	private void function _setDataManagerCustomizationService( required any dataManagerCustomizationService ) {
+		_dataManagerCustomizationService = arguments.dataManagerCustomizationService;
 	}
 
 	private struct function _getExporterMap() {

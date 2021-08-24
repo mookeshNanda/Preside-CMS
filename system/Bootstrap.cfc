@@ -5,11 +5,13 @@ component {
 		, string  name                         = arguments.id & ExpandPath( "/" )
 		, array   statelessUrlPatterns         = _getDefaultStatelessUrlPatterns()
 		, array   statelessUserAgentPatterns   = _getDefaultStatelessUserAgents()
+		, boolean presideSessionManagement     = _usePresideSessionManagement()
 		, boolean sessionManagement
 		, any     sessionTimeout               = CreateTimeSpan( 0, 0, 40, 0 )
 		, numeric applicationReloadTimeout     = 1200
 		, numeric applicationReloadLockTimeout = 0
 		, string  scriptProtect                = "none"
+		, string  cookieSameSitePolicy         = "None"  // "None", "Lax" or "Strict"
 		, string  reloadPassword               = "true"
 		, boolean showDbSyncScripts            = false
 		, boolean bufferOutput                 = true
@@ -22,10 +24,12 @@ component {
 		this.COLDBOX_RELOAD_PASSWORD                 = arguments.reloadPassword;
 		this.name                                    = arguments.name;
 		this.scriptProtect                           = arguments.scriptProtect;
+		this.cookieSameSitePolicy                    = arguments.cookieSameSitePolicy;
 		this.statelessUrlPatterns                    = arguments.statelessUrlPatterns;
 		this.statelessUserAgentPatterns              = arguments.statelessUserAgentPatterns;
 		this.statelessRequest                        = isStatelessRequest( _getUrl() );
-		this.sessionManagement                       = arguments.sessionManagement ?: !this.statelessRequest;
+		this.presideSessionManagement                = arguments.presideSessionManagement;
+		this.sessionManagement                       = !arguments.presideSessionManagement && ( arguments.sessionManagement ?: !this.statelessRequest );
 		this.sessionTimeout                          = arguments.sessionTimeout;
 		this.showDbSyncScripts                       = arguments.showDbSyncScripts;
 		this.bufferOutput                            = arguments.bufferOutput;
@@ -39,11 +43,12 @@ component {
 	public boolean function onRequestStart( required string targetPage ) {
 		_pingCheck();
 		_maintenanceModeCheck();
-		_readHttpBodyNowBecauseLuceeSeemsToBeSporadicallyBlankingItFurtherDownTheRequest();
 
 		if ( _reloadRequired() ) {
 			_initEveryEverything();
 		}
+
+		_restoreSession();
 
 		return application.cbBootstrap.onRequestStart( arguments.targetPage );
 	}
@@ -53,7 +58,12 @@ component {
 			_isReloading( false );
 		}
 
-		_invalidateSessionIfNotUsed();
+		if ( this.presideSessionManagement && !this.statelessRequest ) {
+			_persistSession();
+			_removeSessionCookies();
+		} else {
+			_invalidateSessionIfNotUsed();
+		}
 		_cleanupCookies();
 	}
 
@@ -62,7 +72,12 @@ component {
 			_isReloading( false );
 		}
 
-		_invalidateSessionIfNotUsed();
+		if ( this.presideSessionManagement ) {
+			_persistSession();
+			_removeSessionCookies();
+		} else {
+			_invalidateSessionIfNotUsed();
+		}
 		_cleanupCookies();
 	}
 
@@ -361,10 +376,6 @@ component {
 		return "preside.system.config.Config";
 	}
 
-	private void function _readHttpBodyNowBecauseLuceeSeemsToBeSporadicallyBlankingItFurtherDownTheRequest() {
-		request.http = { body = ToString( GetHttpRequestData().content ) };
-	}
-
 	private boolean function _showErrors() {
 		var coldboxController = _getColdboxController();
 		var injectedExists    = IsBoolean( application.env.showErrors ?: "" );
@@ -498,15 +509,14 @@ component {
 		var cleanedCookies = [];
 
 		try {
-			var allCookies = resp.getHeaders( "Set-Cookie" );
+			var allCookies = _getResponseHeader( "Set-Cookie" );
 		} catch( "java.lang.AbstractMethodError" e ) {
 			// some requests are dummy requests with dummy response objects that do not implement getHeaders()
 			return;
 		}
 
 		if ( ArrayLen( allCookies ) ) {
-			for( var i=1; i <= ArrayLen( allCookies ); i++ ) {
-				var cooky = allCookies[ i ];
+			for( var cooky in allCookies ) {
 				if ( !ReFindNoCase( "^(CFID|CFTOKEN|JSESSIONID|SESSIONID)=", cooky ) ) {
 					cleanedCookies.append( cooky );
 				}
@@ -540,7 +550,7 @@ component {
 
 		for( var headerName in headerNames ) {
 			if ( headerName != "Set-Cookie" ) {
-				headers[ headerName ] = resp.getHeaders( headerName );
+				headers[ headerName ] = _getResponseHeader( headerName );
 			}
 		}
 
@@ -561,6 +571,25 @@ component {
 		}
 	}
 
+	private array function _getResponseHeader( required string headerName ) {
+		var pc            = getPageContext();
+		var resp          = pc.getResponse();
+		var rawValues     = resp.getHeaders( arguments.headerName );
+		var headerValues  = [];
+
+		try{
+			for ( var value in rawValues ) {
+				ArrayAppend( headerValues, value );
+			}
+			return headerValues;
+		} catch( e ) {}
+
+		for( var i=1; i <= ArrayLen( rawValues ); i++ ) {
+			ArrayAppend( headerValues, rawValues[ i ] );
+		}
+
+		return headerValues;
+	}
 
 	private void function _cleanupCookies() {
 		var pc             = getPageContext();
@@ -569,7 +598,7 @@ component {
 		var sessionCookies = [ "CFID", "CFTOKEN" ];
 
 		try {
-			var allCookies = resp.getHeaders( "Set-Cookie" );
+			var allCookies = _getResponseHeader( "Set-Cookie" );
 		} catch( "java.lang.AbstractMethodError" e ) {
 			// some requests are dummy requests with dummy response objects that do not implement getHeaders()
 			return;
@@ -586,6 +615,8 @@ component {
 			return;
 		}
 
+		var sameSitePolicy    = this.cookieSameSitePolicy;
+		var sameSiteRegex     = "(^|;|\s)SameSite=#sameSitePolicy#(;|$)";
 		var httpRegex         = "(^|;|\s)HttpOnly(;|$)";
 		var secureRegex       = "(^|;|\s)Secure(;|$)";
 		var cleanedCookies    = [];
@@ -593,8 +624,7 @@ component {
 		var site              = cbController.getRequestContext().getSite();
 		var isSecure          = ( site.protocol ?: "http" ) == "https";
 
-		for( var i=1; i <= ArrayLen( allCookies ); i++ ) {
-			var cooky = allCookies[ i ];
+		for( var cooky in allCookies ) {
 			if ( !Len( Trim( cooky ) ) ) {
 				continue;
 			}
@@ -611,6 +641,11 @@ component {
 
 			if ( isSecure && !ReFindNoCase( secureRegex, cooky ) ) {
 				cooky = ListAppend( cooky, "Secure", ";" );
+				anyCookiesChanged = true;
+			}
+
+			if ( isSecure && !ReFindNoCase( sameSiteRegex, cooky ) ) {
+				cooky = ListAppend( cooky, "SameSite=#sameSitePolicy#", ";" );
 				anyCookiesChanged = true;
 			}
 
@@ -730,8 +765,8 @@ component {
 	}
 
 	private string function _getUrl() {
-		var requestData = GetHttpRequestData();
-		var requestUrl  = requestData.headers[ 'X-Original-URL' ] ?: "";
+		var headers    = GetHttpRequestData( false ).headers;
+		var requestUrl = headers[ 'X-Original-URL' ] ?: "";
 
 		if ( !Len( Trim( requestUrl ) ) ) {
 			requestUrl = request[ "javax.servlet.forward.request_uri" ] ?: "";
@@ -744,7 +779,7 @@ component {
 				if( isBoolean( cgi.server_port_secure ) AND cgi.server_port_secure){
 					protocol = "https";
 				} else {
-					protocol = requestData.headers[ "x-forwarded-proto" ] ?: ( requestData.headers[ "x-scheme" ] ?: LCase( ListFirst( cgi.server_protocol, "/" ) ) );
+					protocol = headers[ "x-forwarded-proto" ] ?: ( headers[ "x-scheme" ] ?: LCase( ListFirst( cgi.server_protocol, "/" ) ) );
 				}
 
 				requestUrl = protocol & "://" & cgi.http_host & requestUrl;
@@ -809,5 +844,39 @@ component {
 		}
 
 		return application._presideDefaultStatelessUserAgentPatterns;
+	}
+
+	private boolean function _usePresideSessionManagement() {
+		var _env = server.system.environment ?: {};
+
+		return IsBoolean( _env.PRESIDE_SESSION_MANAGEMENT ?: "" ) && _env.PRESIDE_SESSION_MANAGEMENT;
+	}
+
+	private void function _restoreSession() {
+		if ( this.presideSessionManagement && !this.statelessRequest ) {
+			var storage = _getSessionStorage();
+			if ( !IsNull( local.storage ) ) {
+				storage.restore();
+			}
+		}
+	}
+
+	private void function _persistSession() {
+		if ( this.presideSessionManagement && !this.statelessRequest ) {
+			var storage = _getSessionStorage();
+			if ( !IsNull( local.storage ) ) {
+				storage.persist();
+			}
+		}
+	}
+
+	private any function _getSessionStorage() {
+		var controller = _getColdboxController();
+
+		if ( !IsNull( local.controller ) ) {
+			return controller.getWirebox().getInstance( "sessionStorage" );
+		}
+
+		return;
 	}
 }

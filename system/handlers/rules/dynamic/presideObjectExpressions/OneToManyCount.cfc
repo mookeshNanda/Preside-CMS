@@ -61,12 +61,17 @@ component extends="preside.system.base.AutoObjectExpressionHandler" {
 			, groupBy             = "#objectName#.#idField#"
 			, extraFilters        = subQueryExtraFilters
 			, getSqlAndParamsOnly = true
-		).sql;
+		);
 
 		var subQueryAlias = "manyToManyCount" & CreateUUId().lCase().replace( "-", "", "all" );
 		var paramName     = subQueryAlias;
 		var filterSql     = "#subQueryAlias#.onetomany_count ${operator} :#paramName#";
 		var params        = { "#paramName#" = { value=arguments.value, type="cf_sql_number" } };
+
+		for( var param in subQuery.params ) {
+			params[ param.name ] = param;
+			params[ param.name ].delete( "name" );
+		}
 
 		for( var extraFilter in subQueryExtraFilters ) {
 			params.append( extraFilter.filterParams ?: {} );
@@ -97,7 +102,7 @@ component extends="preside.system.base.AutoObjectExpressionHandler" {
 
 		return [ { filter=filterSql, filterParams=params, extraJoins=[ {
 			  type           = "left"
-			, subQuery       = subQuery
+			, subQuery       = subQuery.sql
 			, subQueryAlias  = subQueryAlias
 			, subQueryColumn = "id"
 			, joinToTable    = prefix
@@ -114,8 +119,7 @@ component extends="preside.system.base.AutoObjectExpressionHandler" {
 		,          string  parentPropertyName = ""
 	) {
 		var objectBaseUri       = presideObjectService.getResourceBundleUriRoot( objectName );
-		var relatedToBaseUri    = presideObjectService.getResourceBundleUriRoot( relatedTo );
-		var relatedToTranslated = translateResource( relatedToBaseUri & "title", relatedTo );
+		var relatedToTranslated = translateObjectProperty( objectName, propertyName );
 		var possesses           = translateResource(
 			  uri          = objectBaseUri & "field.#propertyName#.possesses.truthy"
 			, defaultValue = translateResource( "rules.dynamicExpressions:boolean.possesses" )
@@ -138,8 +142,7 @@ component extends="preside.system.base.AutoObjectExpressionHandler" {
 		,          string parentPropertyName = ""
 	){
 		var objectBaseUri       = presideObjectService.getResourceBundleUriRoot( objectName );
-		var relatedToBaseUri    = presideObjectService.getResourceBundleUriRoot( relatedTo );
-		var relatedToTranslated = translateResource( relatedToBaseUri & "title", relatedTo );
+		var relatedToTranslated = translateObjectProperty( objectName, propertyName );
 		var possesses           = translateResource(
 			  uri          = objectBaseUri & "field.#propertyName#.possesses.truthy"
 			, defaultValue = translateResource( "rules.dynamicExpressions:boolean.possesses" )

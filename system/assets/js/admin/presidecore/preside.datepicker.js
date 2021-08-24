@@ -42,7 +42,7 @@
 
 		datePicker = $thisPicker.data( "datepicker" );
 
-		if ( relativeToField.length || relativeOperator.length ) {
+		if ( relativeToField.length && relativeOperator.length ) {
 			$form          = $thisPicker.closest( "form" );
 			$relativeField = $form.find( "[name=" + relativeToField + "]" );
 
@@ -68,7 +68,6 @@
 
 				$relativeField.on( "changeDate", function( e ){
 					var newDate   = new Date( e.date );
-					    fieldDate = datetimePicker.date();
 
 					switch( relativeOperator ) {
 						case "lt":

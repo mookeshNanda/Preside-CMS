@@ -25,6 +25,7 @@ component displayName="Preside Object Service" {
 	 * @defaultQueryCache.inject      cachebox:DefaultQueryCache
 	 * @interceptorService.inject     coldbox:InterceptorService
 	 * @reloadDb.inject               coldbox:setting:syncDb
+	 * @throwOnLongTableName.inject   coldbox:setting:throwOnLongTableName
 	 */
 	public any function init(
 		  required array   objectDirectories
@@ -41,6 +42,7 @@ component displayName="Preside Object Service" {
 		, required any     defaultQueryCache
 		, required any     interceptorService
 		,          boolean reloadDb = true
+		,          boolean throwOnLongTableName = false
 	) {
 		_setObjectDirectories( arguments.objectDirectories );
 		_setObjectReader( arguments.objectReader );
@@ -55,6 +57,7 @@ component displayName="Preside Object Service" {
 		_setVersioningService( arguments.versioningService );
 		_setLabelRendererService( arguments.labelRendererService );
 		_setInterceptorService( arguments.interceptorService );
+		_setThrowOnLongTableName( arguments.throwOnLongTableName );
 		_setInstanceId( CreateObject('java','java.lang.System').identityHashCode( this ) );
 
 		_loadObjects();
@@ -184,7 +187,7 @@ component displayName="Preside Object Service" {
 		,          boolean useCache                = _getUseCacheDefault( arguments.objectName )
 		,          boolean fromVersionTable        = false
 		,          numeric specificVersion         = 0
-		,          boolean allowDraftVersions      = _getDefaultAllowDraftVersions()
+		,          boolean allowDraftVersions      = objectUsesDrafts( arguments.objectName ) && _getDefaultAllowDraftVersions()
 		,          string  forceJoins              = ""
 		,          array   extraJoins              = []
 		,          boolean recordCountOnly         = false
@@ -201,8 +204,11 @@ component displayName="Preside Object Service" {
 			return IsQuery( interceptorResult.returnValue ?: "" ) ? interceptorResult.returnValue : QueryNew('');
 		}
 
-		if ( !args.allowDraftVersions && !args.fromVersionTable && objectIsVersioned( args.objectName ) ) {
+		if ( !args.allowDraftVersions && !args.fromVersionTable && objectUsesDrafts( args.objectName ) ) {
 			args.extraFilters.append( _getDraftExclusionFilter( args.objectname ) );
+			if ( ( arguments.selectManyToMany ?: false ) && !isEmpty( arguments.relationshipTable ?: "" ) && objectIsVersioned( arguments.relationshipTable ) ) {
+				args.extraFilters.append( _getDraftExclusionFilter( arguments.relationshipTable ) );
+			}
 		}
 
 		args.extraFilters.append( _expandSavedFilters( argumentCollection=args ), true );
@@ -221,6 +227,7 @@ component displayName="Preside Object Service" {
 		var objMeta = _getObject( args.objectName ).meta;
 		var adapter = _getAdapter( objMeta.dsn );
 
+		args.selectFields   = expandHavingClauses( argumentCollection=args );
 		args.selectFields   = parseSelectFields( argumentCollection=args );
 		args.preparedFilter = _prepareFilter(
 			  argumentCollection = args
@@ -240,13 +247,30 @@ component displayName="Preside Object Service" {
 		args.joins       = _getJoinsFromJoinTargets( argumentCollection=args );
 
 		if ( args.fromVersionTable && objectIsVersioned( args.objectName ) ) {
-			args.result = _selectFromVersionTables(
+			var versionTablePrep = _prepareSelectFromVersionTables(
 				  argumentCollection = args
 				, filter             = args.preparedFilter.filter
 				, params             = args.preparedFilter.params
 				, originalTableName  = args.objMeta.tableName
 				, distinct           = args.distinct
 			);
+
+			if ( arguments.getSqlAndParamsOnly ) {
+				return {
+					  sql    = versionTablePrep.sql
+					, params = arguments.formatSqlParams ? _formatParams( versionTablePrep.params ) : versionTablePrep.params
+				};
+			} else {
+				args.result = _runSql(
+					  sql    = versionTablePrep.sql
+					, dsn    = versionTablePrep.dsn
+					, params = versionTablePrep.params
+				);
+
+				if ( arguments.recordCountOnly ) {
+					args.result = Val( args.result.record_count ?: "" );
+				}
+			}
 		} else {
 			var sql = args.adapter.getSelectSql(
 				  argumentCollection = args
@@ -399,7 +423,7 @@ component displayName="Preside Object Service" {
 				newId = cleanedData[idField];
 			}
 		}
-		if ( objectIsVersioned( args.objectName ) ) {
+		if ( objectUsesDrafts( args.objectName ) ) {
 			cleanedData._version_is_draft = cleanedData._version_has_drafts = args.isDraft;
 		}
 
@@ -440,6 +464,7 @@ component displayName="Preside Object Service" {
 							, sourceId            = newId
 							, targetIdList        = manyToManyData[ key ]
 							, requiresVersionSync = false
+							, isDraft             = args.isDraft
 						);
 					} else if ( relationship == "one-to-many" ) {
 						var isOneToManyConfigurator = isOneToManyConfiguratorObject( args.objectName, key );
@@ -671,9 +696,10 @@ component displayName="Preside Object Service" {
 
 				var versionedManyToManyFields = _getVersioningService().getVersionedManyToManyFieldsForObject( arguments.objectName );
 				var oldManyToManyData = versionedManyToManyFields.len() ? getDeNormalizedManyToManyData(
-					objectName   = arguments.objectName
-					, id           = record[ idField ]
-					, selectFields = versionedManyToManyFields
+					  objectName       = arguments.objectName
+					, id               = record[ idField ]
+					, selectFields     = versionedManyToManyFields
+					, fromVersionTable = arguments.isDraft
 				) : {};
 
 				var newDataForChangedFieldsCheck = Duplicate( cleanedData );
@@ -704,6 +730,7 @@ component displayName="Preside Object Service" {
 					, manyToManyData       = manyToManyData
 					, existingRecords      = arguments.oldData
 					, versionNumber        = arguments.versionNumber ? arguments.versionNumber : getNextVersionNumber()
+					, isDraft              = arguments.isDraft
 				);
 			} else if ( objectIsVersioned( arguments.objectName ) && Len( Trim( arguments.id ?: "" ) ) ) {
 				_getVersioningService().updateLatestVersionWithNonVersionedChanges(
@@ -713,7 +740,7 @@ component displayName="Preside Object Service" {
 				);
 			}
 
-			if ( arguments.useVersioning ) {
+			if ( arguments.useVersioning && objectUsesDrafts( arguments.objectName ) ) {
 				if ( arguments.isDraft ) {
 					if ( !_isDraft( argumentCollection=arguments ) ) {
 						cleanedData = { _version_has_drafts = true };
@@ -767,6 +794,7 @@ component displayName="Preside Object Service" {
 								, sourceId            = updatedId
 								, targetIdList        = manyToManyData[ key ]
 								, requiresVersionSync = false
+								, isDraft             = arguments.isDraft
 							);
 						}
 					} else if ( relationship == "one-to-many" ) {
@@ -936,11 +964,12 @@ component displayName="Preside Object Service" {
 	 * @objectName.hint Name of the object in which the records may or may not exist
 	 */
 	public boolean function dataExists( required string  objectName ) autodoc=true {
-		var args = arguments;
-		args.useCache     = false;
-		args.selectFields = [ "1" ];
-
-		return selectData( argumentCollection=args ).recordCount;
+		return selectData(
+			  argumentCollection = arguments
+			, useCache           = false
+			, selectFields       = [ "1 as record" ]
+			, recordCountOnly    = true
+		) > 0;
 	}
 
 	/**
@@ -1001,6 +1030,9 @@ component displayName="Preside Object Service" {
 			}
 		}
 
+		selectDataArgs.selectManyToMany  = true;
+		selectDataArgs.relationshipTable = getObjectPropertyAttribute( arguments.objectName, arguments.propertyName, "relatedVia", "" );
+
 		return selectData( argumentCollection = selectDataArgs );
 	}
 
@@ -1031,6 +1063,7 @@ component displayName="Preside Object Service" {
 		, required string  sourceId
 		, required string  targetIdList
 		,          boolean requiresVersionSync = true
+		,          boolean isDraft             = false
 	) autodoc=true {
 		if ( arguments.requiresVersionSync ) {
 			return updateData(
@@ -1041,7 +1074,7 @@ component displayName="Preside Object Service" {
 			) > 0;
 		}
 
-		var prop = getObjectProperty( arguments.sourceObject, arguments.sourceProperty );
+		var prop         = getObjectProperty( arguments.sourceObject, arguments.sourceProperty );
 		var targetObject = prop.relatedTo ?: "";
 		var pivotTable   = prop.relatedVia ?: "";
 		var sourceFk     = prop.relationshipIsSource ? prop.relatedViaSourceFk : prop.relatedViaTargetFk;
@@ -1049,6 +1082,8 @@ component displayName="Preside Object Service" {
 
 		if ( Len( Trim( pivotTable ) ) and Len( Trim( targetObject ) ) ) {
 			var newRecords      = ListToArray( arguments.targetIdList );
+			var newAddedRecords = duplicate( newRecords );
+			var existingRecords = [];
 			var anythingChanged = false;
 			var hasSortOrder    = StructKeyExists( getObjectProperties( pivotTable ), "sort_order" );
 			var currentSelect   = [ "#targetFk# as targetId" ];
@@ -1067,29 +1102,45 @@ component displayName="Preside Object Service" {
 
 				for( var record in currentRecords ) {
 					if ( newRecords.find( record.targetId ) && ( !hasSortOrder || newRecords.find( record.targetId ) == record.sort_order ) ) {
-						ArrayDelete( newRecords, record.targetId );
+						ArrayDelete( newAddedRecords, record.targetId );
+						ArrayAppend( existingRecords, record.targetId );
 					} else {
 						anythingChanged = true;
 						break;
 					}
 				}
 
-				anythingChanged = anythingChanged || newRecords.len();
+				anythingChanged = anythingChanged || newAddedRecords.len();
 
-				if ( anythingChanged ) {
+				if ( anythingChanged && !arguments.isDraft ) {
 					deleteData(
 						  objectName = pivotTable
 						, filter     = { "#sourceFk#" = arguments.sourceId }
 					);
 
-					newRecords = ListToArray( arguments.targetIdList );
+
 					for( var i=1; i <=newRecords.len(); i++ ) {
 						insertData(
 							  objectName    = pivotTable
 							, useVersioning = false
-							, data          = { "#sourceFk#"=arguments.sourceId, "#targetFk#"=newRecords[i], sort_order=i }
+							, isDraft       = arguments.isDraft
+							, data          = {
+								  "#sourceFk#" = arguments.sourceId
+								, "#targetFk#" = newRecords[i]
+								, sort_order   = i
+							}
 						);
 					}
+				} else if ( !arguments.isDraft && objectIsVersioned( pivotTable ) && objectUsesDrafts( pivotTable ) ) {
+					updateData(
+						  objectName    = pivotTable
+						, filter        = { "#sourceFk#" = arguments.sourceId }
+						, useVersioning = false
+						, data          = {
+							  _version_is_draft   = false
+							, _version_has_drafts = false
+						}
+					);
 				}
 			}
 		}
@@ -1585,6 +1636,53 @@ component displayName="Preside Object Service" {
 	}
 
 	/**
+	 * Returns the flag field name of the object
+	 *
+	 * @autodoc    true
+	 * @objectName Name of the object whose flag field you wish to get
+	 */
+	public string function getFlagField( required string objectName ) {
+		var flagEnabled = getObjectAttribute( arguments.objectName, "flagEnabled", "" );
+
+		if ( IsBoolean( flagEnabled ) && flagEnabled ) {
+			return getObjectAttribute( arguments.objectName, "flagField", "recordFlagged" );
+		}
+
+		return "";
+	}
+
+	public boolean function isFlaggingEnabled( required string objectName ) {
+		var flagEnabled = getObjectAttribute( arguments.objectName, "flagEnabled", "" );
+
+		if ( IsBoolean( flagEnabled ) && flagEnabled ) {
+			var flagField = getObjectAttribute( arguments.objectName, "flagField", "recordFlagged" );
+
+			return Len( Trim( flagField ) );
+		}
+
+		return false;
+	}
+
+	public boolean function recordIsFlagged(
+		  required string objectName
+		, required string recordId
+	) {
+		var flagField = getFlagField( arguments.objectName );
+
+		if ( !isEmpty( flagField ) ) {
+			return dataExists(
+				  objectName = arguments.objectName
+				, filter     = {
+					  id            = arguments.recordId
+					, "#flagField#" = true
+				}
+			);
+		}
+
+		return false;
+	}
+
+	/**
 	 * Returns an arbritary attribute value that is defined on the object's :code:`component` tag.
 	 * \n
 	 * ${arguments}
@@ -1660,6 +1758,40 @@ component displayName="Preside Object Service" {
 		var obj = _getObject( objectName );
 
 		return IsBoolean( obj.meta.versioned ?: "" ) && obj.meta.versioned;
+	}
+
+	/**
+	 * Returns whether or not the given object is using the drafts system
+	 *
+	 * @objectName.hint Name of the object you wish to check
+	 */
+	public boolean function objectUsesDrafts( required string objectName ) autodoc=true {
+		var obj = _getObject( objectName );
+
+		return IsBoolean( obj.meta.useDrafts ?: "" ) && obj.meta.useDrafts;
+	}
+
+	/**
+	 * Returns whether or not the given record has draft
+	 *
+	 * @objectName.hint Name of the object you wish to check
+	 * @recordId.hint   ID of the object record you wish to check
+	 */
+	public boolean function objectRecordHasDraft(
+		  required string objectName
+		, required string recordId
+	) autodoc=true {
+		if ( objectUsesDrafts( objectName=arguments.objectName ) ) {
+			return dataExists(
+				  objectName = arguments.objectName
+				, filter     = {
+					  id                  = arguments.recordId
+					, _version_has_drafts = true
+				}
+			);
+		}
+
+		return false;
 	}
 
 	/**
@@ -1763,6 +1895,38 @@ component displayName="Preside Object Service" {
 		}
 
 		return blocking;
+	}
+
+	/**
+	 * Returns whether or not the given record
+	 * has any related records in other tables that
+	 * reference it.
+	 *
+	 * @autodoc true
+	 *
+	 */
+	public boolean function hasReferences( required string objectName, required any recordId ) {
+		var obj   = _getObject( objectName=arguments.objectName );
+		var joins = _getRelationshipGuidance().getObjectRelationships( arguments.objectName );
+		var foreignObjName  = "";
+		var join  = "";
+		var filter = {};
+		var recordCount = 0;
+
+		for( foreignObjName in joins ){
+			for( join in joins[ foreignObjName ] ) {
+				if ( join.type == "one-to-many" || join.type == "many-to-many" ) {
+					filter = { "#join.fk#" = arguments.recordId };
+					recordCount = selectData( objectName=foreignObjName, selectFields=["count(*) as record_count"], filter=filter, useCache=false ).record_count;
+
+					if ( Val( recordCount ) ) {
+						return true;
+					}
+				}
+			}
+		}
+
+		return false;
 	}
 
 	public numeric function deleteRelatedData( required string objectName, required any recordId ) {
@@ -2073,6 +2237,60 @@ component displayName="Preside Object Service" {
 		return fields;
 	}
 
+	public array function expandHavingClauses(
+		  required array  selectFields
+		, required array  extraFilters
+		, required string objectName
+	) {
+		var extraFilters = arguments.extraFilters;
+		var selectFields = Duplicate( arguments.selectFields );
+		var props        = getObjectProperties( arguments.objectName );
+
+		for ( var filter in extraFilters ) {
+			if( Len( Trim( filter.having ?: "" ) ) ) {
+				var fields = filter.havingfields ?: ListToArray( filter.propertyName ?: "" );
+
+				for ( var field in fields ) {
+					var propertyLen = ListLen( field, "." );
+
+					if ( propertyLen == 1 ) {
+						if( !ArrayFindNoCase( selectFields, field ) ) {
+							field = "#arguments.objectName#.#field#";
+						}
+					}
+					else if (propertyLen == 2 ) {
+						var unescapedField    = _unescapeEntity( field );
+						var prefix            = ListFirst( unescapedField, "." );
+						var propertyName      = ListLast( unescapedField, "." );
+						var relatedObjectName = _resolveObjectNameFromColumnJoinSyntax( arguments.objectName, prefix );
+
+						if ( objectExists( relatedObjectName ) ) {
+							props = getObjectProperties( relatedObjectName );
+						}
+
+						var prop = props[ propertyName ] ?: {};
+
+						if ( Len( Trim( prop.formula ?: "" ) ) ) {
+							filter.having = ReReplace( filter.having, "(^|\s)#Replace( field, "$", "\$" )#(\s)", " #propertyName# " );
+						} else {
+							var newFieldName = Replace( unescapedField, ".", "_" );
+							filter.having = ReReplace( filter.having, "(^|\s)#Replace( field, "$", "\$" )#(\s)", " #newFieldName# " );
+							if ( !ArrayFindNoCase( selectFields, newFieldName ) ) {
+								ArrayAppend( selectFields, "#field# as #newFieldName#" );
+								continue;
+							}
+						}
+					}
+
+					if ( !ArrayFindNoCase( selectFields, field ) ) {
+						ArrayAppend( selectFields, field );
+					}
+				};
+			}
+		}
+		return selectFields;
+	}
+
 	public string function expandFormulaFields(
 		  required string  objectName
 		, required string  expression
@@ -2204,11 +2422,28 @@ component displayName="Preside Object Service" {
 			_getVersioningService().setupVersioningForVersionedObjects( objects, StructKeyArray( dsns )[1] );
 		}
 
+		_ensureValidDbEntityNames( objects );
 		_setObjects( objects );
 		_setDsns( StructKeyArray( dsns ) );
 		_setupAliasCache();
 
 		_announceInterception( state="postLoadPresideObjects", interceptData={ objects=objects } );
+	}
+
+	private void function _ensureValidDbEntityNames( required struct objects ) {
+		for( var objectName in arguments.objects ) {
+			var objMeta = arguments.objects[ objectName ].meta ?: {};
+			var adapter = _getAdapter( objMeta.dsn ?: "" );
+			var maxTableNameLength = adapter.getTableNameMaxLength();
+
+			if ( Len( objMeta.tableName ?: "" ) > maxTableNameLength ) {
+				if ( _getThrowOnLongTableName() ) {
+					throw( type="PresideObjectService.invalidTableName", message="Table name is too long", detail="The table name, [#objMeta.tableName#], is longer than the maximum [#maxTableNameLength# characters] allowed by the database." );
+				}
+
+				objMeta.tableName = Left( objMeta.tableName, maxTableNameLength );
+			}
+		}
 	}
 
 	private void function _setupAliasCache() {
@@ -2846,7 +3081,7 @@ component displayName="Preside Object Service" {
 		return interceptArguments.tableJoins;
 	}
 
-	private query function _selectFromVersionTables(
+	private struct function _prepareSelectFromVersionTables(
 		  required string  objectName
 		, required string  originalTableName
 		, required array   joins
@@ -2860,6 +3095,7 @@ component displayName="Preside Object Service" {
 		, required numeric maxRows
 		, required numeric startRow
 		,          boolean distinct = false
+		,          boolean recordCountOnly = false
 	) {
 		var adapter              = getDbAdapterForObject( arguments.objectName );
 		var versionObj           = _getObject( getVersionObjectName( arguments.objectName ) ).meta;
@@ -2883,7 +3119,7 @@ component displayName="Preside Object Service" {
 			versionFilter = "#arguments.objectName#._version_number = :#arguments.objectName#._version_number";
 			params.append( { name="#arguments.objectName#___version_number", value=arguments.specificVersion, type="cf_sql_int" } );
 
-			if ( !arguments.allowDraftVersions ) {
+			if ( !arguments.allowDraftVersions && objectUsesDrafts( arguments.objectName ) ) {
 				versionFilter &= " and ( #arguments.objectName#._version_is_draft is null or #arguments.objectName#._version_is_draft = :#arguments.objectName#._version_is_draft )";
 				params.append( { name="#arguments.objectName#___version_is_draft", value=false, type="cf_sql_bit" } );
 			}
@@ -2913,7 +3149,15 @@ component displayName="Preside Object Service" {
 
 		sql = adapter.getSelectSql( argumentCollection=args );
 
-		return _runSql( sql=sql, dsn=versionObj.dsn, params=arguments.params );
+		if ( arguments.recordCountOnly ) {
+			sql = adapter.getCountSql( sql );
+		}
+
+		return {
+			  sql    = sql
+			, dsn    = versionObj.dsn
+			, params = arguments.params
+		};
 	}
 
 	private array function _alterJoinsToUseVersionTables(
@@ -3045,10 +3289,10 @@ component displayName="Preside Object Service" {
 			entities = StructKeyList( entities, "|" );
 			aliasEntitiesOnly = StructKeyList( aliasEntitiesOnly, "|" );
 
-			_aliasedAliasRegex = "(^|\s|,|\(|\)|`|\[)((#entities#)(\$(#entities#))*)([`\]])?\.([`\[])?(#aliasEntitiesOnly#)(\s|$|\)|,|`|\])";
+			this._aliasedAliasRegex = "(^|\s|,|\(|\)|`|\[)((#entities#)(\$(#entities#))*)([`\]])?\.([`\[])?(#aliasEntitiesOnly#)(\s|$|\)|,|`|\])";
 		}
 
-		return _aliasedAliasRegex;
+		return this._aliasedAliasRegex;
 	}
 
 	private struct function _reSearch( required string regex, required string text ) {
@@ -3322,7 +3566,10 @@ component displayName="Preside Object Service" {
 	}
 
 	private any function _generateValue( required string objectName, required string id, required string generator, required struct data, required struct prop ) {
-		switch( ListFirst( arguments.generator, ":" ) ) {
+		var generatorName = ListFirst( arguments.generator, ":" );
+		var generatorArg  = ListRest( arguments.generator, ":" );
+
+		switch( generatorName ) {
 			case "UUID":
 				return CreateUUId();
 			break;
@@ -3332,7 +3579,7 @@ component displayName="Preside Object Service" {
 			case "method":
 				var obj = getObject( arguments.objectName );
 
-				return obj[ ListRest( arguments.generator, ":" ) ]( arguments.data );
+				return obj[ generatorArg ]( arguments.data );
 			break;
 			case "hash":
 				if ( Len( Trim( prop.generateFrom ?: "" ) ) ) {
@@ -3347,6 +3594,10 @@ component displayName="Preside Object Service" {
 
 					return Hash( valueToHash );
 				}
+			break;
+			case "nextint":
+				var existing = selectData( objectName=arguments.objectName, selectFields=[ "Max( #arguments.prop.name# ) as max_value" ] );
+				return Val( existing.max_value ?: "" ) + 1;
 			break;
 			case "slug":
 				var generateFrom = prop.generateFrom ?: getLabelField( arguments.objectName );
@@ -3376,6 +3627,16 @@ component displayName="Preside Object Service" {
 
 				return slug;
 			break;
+		}
+
+		var coldboxHandler = "generators.#generatorName#";
+		if ( $getColdbox().handlerExists( coldboxHandler ) ) {
+			return $runEvent(
+				  event          = coldboxHandler
+				, private        = true
+				, prePostExempt  = true
+				, eventArguments = { args=arguments }
+			);
 		}
 
 		return;
@@ -3443,19 +3704,14 @@ component displayName="Preside Object Service" {
 	}
 
 	private boolean function _getUseCacheDefault( required string objectName ) {
-		try {
-			return request[ "_defaultUseCache#arguments.objectName#" ];
-		} catch( any e ) {
+		if ( !StructKeyExists( request, "_defaultUseCache#arguments.objectName#" ) ) {
 			request[ "_defaultUseCache#arguments.objectName#" ] = _objectUsesCaching( arguments.objectName ) && $getRequestContext().getUseQueryCache();
 		}
-
 		return request[ "_defaultUseCache#arguments.objectName#" ];
 	}
 
 	private boolean function _getDefaultAllowDraftVersions() {
-		try {
-			return request._defaultAllowDraftVersions;
-		} catch( any e ) {
+		if ( !StructKeyExists( request , "_defaultAllowDraftVersions" ) ) {
 			request._defaultAllowDraftVersions = $getRequestContext().showNonLiveContent();
 		}
 
@@ -3558,6 +3814,10 @@ component displayName="Preside Object Service" {
 		return interceptData.interceptorResult ?: {};
 	}
 
+	private string function _unescapeEntity( required string entityName ) {
+		return ReplaceList( arguments.entityName , '`,",[,]', "");
+	}
+
 // GETTERS AND SETTERS
 	private array function _getObjectDirectories() {
 		return _objectDirectories;
@@ -3657,6 +3917,13 @@ component displayName="Preside Object Service" {
 	}
 	private void function _setInterceptorService( required any IiterceptorService ) {
 		_interceptorService = arguments.IiterceptorService;
+	}
+
+	private string function _getThrowOnLongTableName() {
+		return _throwOnLongTableName;
+	}
+	private void function _setThrowOnLongTableName( required string throwOnLongTableName ) {
+		_throwOnLongTableName = arguments.throwOnLongTableName;
 	}
 
 	private struct function _getObjects() {

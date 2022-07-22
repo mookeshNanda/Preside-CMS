@@ -3,6 +3,7 @@
  *
  * @singleton      true
  * @autodoc        true
+ * @presideService true
  */
 component {
 	variables._lib   = [];
@@ -25,7 +26,7 @@ component {
 	}
 
 	/**
-	 * Recieves an html string and returns the same HTML
+	 * Receives an html string and returns the same HTML
 	 * but with all style definitions that reside in `style` tags
 	 * converted to inline styles suitable for email sending.
 	 *
@@ -33,6 +34,10 @@ component {
 	 * @html.hint the original HTML
 	 */
 	public string function inlineStyles( required string html, array styles ) {
+ 		if ( !$helpers.hasTags( arguments.html ) ) {
+			return arguments.html;
+		}
+
 		var cacheKey = "htmlInlineStyles-#Hash( arguments.html )#";
 		var fromCache = _getTemplateCache().get( cacheKey );
 
@@ -40,7 +45,25 @@ component {
 			return fromCache;
 		}
 
-		var doc           = _jsoup.parse( arguments.html );
+		arguments.html = trim( arguments.html );
+
+		var innerHtmlOnly = !FindNoCase( "</html>", arguments.html );
+
+		// special cases of widget which only consist of a table cell or row without a wrapping table tag
+		// jsoup will remove the TD / TR tags in those cases, therefore adding now and stripping after processing
+		var isHtmlTableCell = innerHtmlOnly && ReFindNoCase( "^<td[^>]*>", arguments.html );
+		var isHtmlTableRow  = innerHtmlOnly && !isHtmlTableCell && ReFindNoCase( "^<tr[^>]*>", arguments.html );
+
+		// add dummy wrapping html table and row tags to make sure jsoup parsing works as expected
+		if ( isHtmlTableCell ) {
+			arguments.html = "<table><tbody><tr id='_emailstyleinliner_wrap'>" & arguments.html & "</tr></tbody></table>";
+		}
+		else if ( isHtmlTableRow ) {
+			arguments.html = "<table><tbody id='_emailstyleinliner_wrap'>" & arguments.html & "</tbody></table>"; // tbody useful here as jsoup adds it anyway
+		}
+
+		var doc = _jsoup.parse( arguments.html );
+
 		if ( !StructKeyExists( arguments, "styles" ) ) {
 			arguments.styles = readStyles( doc );
 		}
@@ -50,7 +73,18 @@ component {
 			elementStyle.element.attr( "style", elementStyle.style );
 		}
 
-		var result = doc.toString();
+		var result = "";
+		if ( innerHtmlOnly ) {
+			var selector = ( isHtmlTableCell || isHtmlTableRow ) ? "##_emailstyleinliner_wrap" : "body";
+			result = doc.select( selector );
+			if ( IsArray( local.result ?: "" ) && ArrayLen( result ) ) {
+				result = result[ 1 ].html();
+			} else {
+				result = doc.toString();
+			}
+		} else {
+			result = doc.toString();
+		}
 
 		_getTemplateCache().set( cacheKey, result );
 
@@ -58,7 +92,7 @@ component {
 	}
 
 	/**
-	 * Recieves an html string or jSoup doc and returns an array
+	 * Receives an html string or jSoup doc and returns an array
 	 * of style rules found
 	 *
 	 * @autodoc   true
@@ -89,7 +123,7 @@ component {
 				var style    = tokenizer.nextToken();
 
 				if ( !selector.contains( ":" ) ) { // skip a:hover rules, etc.
-					style = style.reReplace( "[^;]$", ";" );
+					style = style.reReplace( "([^;])$", "\1;" );
 					var rules = style.listToArray( ";" );
 					for( var rule in rules ) {
 						rule = rule.trim();

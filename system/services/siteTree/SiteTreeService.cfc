@@ -178,7 +178,16 @@ component {
 			args.fromVersionTable = true;
 		}
 
-		return _getPObj().selectData( argumentCollection = args );
+		var result = _getPObj().selectData( argumentCollection = args );
+		if ( !result.recordCount && arguments.allowDrafts ) {
+			args.fromVersionTable = false;
+			args.allowDraftVersions = false;
+			StructDelete( args, "specificVersion" );
+
+			result = _getPObj().selectData( argumentCollection = args );
+		}
+
+		return result;
 	}
 
 	public query function getPagesForAjaxSelect(
@@ -519,6 +528,12 @@ component {
 		}
 
 		var homepage = _getPobj().selectData( argumentCollection=homepageArgs );
+		if ( !homepage.recordCount && homepageArgs.fromVersionTable ) {
+			homepageArgs.fromVersionTable = false;
+			homepageArgs.allowDraftVersions = false;
+			StructDelete( homepageArgs, "specificVersion" );
+			homepage = _getPobj().selectData( argumentCollection=homepageArgs );
+		}
 
 
 		if ( homepage.recordCount || !arguments.createIfNotExists ) {
@@ -1670,7 +1685,7 @@ component {
 
 	private boolean function _isAutoRedirectEnabled() {
 		var site = $getRequestContext().getSite();
-		return isBoolean( site.auto_redirect ) && site.auto_redirect;
+		return IsBoolean( site.auto_redirect ?: "" ) && site.auto_redirect;
 	}
 
 	private struct function _calculateSortOrderAndHierarchyFields( required string slug, string parent_page="", string site="" ) {

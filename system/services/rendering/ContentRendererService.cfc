@@ -38,21 +38,25 @@ component {
 
 // PUBLIC API METHODS
 	public any function render( required string renderer, required any data, any context="default", struct args={} ) {
-		var renderer = _getRenderer( name=arguments.renderer, context=arguments.context );
-		var r        = "";
-		var rendered = arguments.data;
+		var interceptData = { content=arguments.data, renderer=arguments.renderer, context=arguments.context, args=args };
+		var renderer      = _getRenderer( name=arguments.renderer, context=arguments.context );
+
+		$announceInterception( "preRenderContent", interceptData );
 
 		if ( renderer.isChain() ) {
-			for( r in renderer.getChain() ){
-				rendered = this.render( renderer=r, data=rendered, context=arguments.context, args=arguments.args );
+			for( var r in renderer.getChain() ){
+				interceptData.content = this.render( renderer=r, data=interceptData.content, context=arguments.context, args=arguments.args );
 			}
-
-			return rendered;
 		} else {
 			var viewletArgs = IsStruct( arguments.data ) ? arguments.data : { data=arguments.data };
 			viewletArgs.append( arguments.args, false );
-			return _getColdbox().renderViewlet( event=renderer.getViewlet(), args=viewletArgs );
+			interceptData.content = _getColdbox().renderViewlet( event=renderer.getViewlet(), args=viewletArgs );
 		}
+
+		$announceInterception( "postRenderContent", interceptData );
+
+		return interceptData.content;
+
 	}
 
 	public string function renderLabel(
@@ -62,25 +66,28 @@ component {
 		,          string labelRenderer = $getPresideObjectService().getObjectAttribute( arguments.objectName, "labelRenderer" )
 		,          array bypassTenants = []
 	) {
-
+		var labelField           = _getPresideObjectService().getObjectAttribute(  arguments.objectName, "labelfield" );
 		var labelRendererService = _getLabelRendererService();
-		var selectFields = arguments.labelRenderer.len() ? labelRendererService.getSelectFieldsForLabel( arguments.labelRenderer ) : [ "${labelfield} as label" ]
-		var record = _getPresideObjectService().selectData(
-			  objectName         = arguments.objectName
-			, filter             = { "#keyField#"=arguments.recordId }
-			, selectFields       = selectFields
-			, allowDraftVersions = $getRequestContext().showNonLiveContent()
-			, bypassTenants     = arguments.bypassTenants
-		);
+		var selectFields         = arguments.labelRenderer.len() ? labelRendererService.getSelectFieldsForLabel( arguments.labelRenderer ) : ( Len( labelField ) ? [ "${labelfield} as label" ] : [] );
 
-		if ( Len( Trim( arguments.labelRenderer ) ) ) {
-			for( var r in record ) {
-				return labelRendererService.renderLabel( arguments.labelRenderer, r );
+		if ( ArrayLen( selectFields ) ) {
+			var record = _getPresideObjectService().selectData(
+				  objectName         = arguments.objectName
+				, filter             = { "#keyField#"=arguments.recordId }
+				, selectFields       = selectFields
+				, allowDraftVersions = $getRequestContext().showNonLiveContent()
+				, bypassTenants     = arguments.bypassTenants
+			);
+
+			if ( Len( Trim( arguments.labelRenderer ) ) ) {
+				for( var r in record ) {
+					return labelRendererService.renderLabel( arguments.labelRenderer, r );
+				}
 			}
-		}
 
-		if ( record.recordCount ) {
-			return record.label;
+			if ( record.recordCount ) {
+				return record.label;
+			}
 		}
 
 		return arguments.recordId;

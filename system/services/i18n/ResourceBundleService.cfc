@@ -4,10 +4,16 @@ component singleton=true {
 	/**
 	 * @bundleDirectories.inject presidecms:directories:i18n
 	 * @siteService.inject       siteService
+	 * @defaultLocale.inject     coldbox:setting:default_locale
 	 */
-	public any function init( required array bundleDirectories, required any siteService ) output=false {
+	public any function init(
+		  required array  bundleDirectories
+		, required any    siteService
+		, required string defaultLocale
+	) {
 		_setBundleDirectories( arguments.bundleDirectories );
 		_setSiteService( arguments.siteService );
+		_setDefaultLocale( arguments.defaultLocale );
 		_setBundleDataCache( {} );
 		_discoverBundles();
 
@@ -121,6 +127,13 @@ component singleton=true {
 				}
 			}
 		}
+		var defaultLocale = _getDefaultLocale();
+		for( var resource in locales ) {
+			if ( resource != "_ALL" && StructKeyExists( locales[ resource ], defaultLocale ) ) {
+				bundles[ resource ] = bundles[ resource ] ?: [];
+				ArrayAppend( bundles[ resource ], locales[ resource ][ defaultLocale ], true );
+			}
+		}
 
 		_setBundleFileDiscoveryCache( bundles, locales );
 
@@ -183,7 +196,7 @@ component singleton=true {
 		var files              = _getBundleFiles( argumentCollection=arguments );
 		var activeSiteTemplate = _getSiteService().getActiveSiteTemplate( emptyIfDefault=true );
 
-		for( file in files ){
+		for( var file in files ){
 			var directory = ReReplace( getDirectoryFromPath( file ), "[\\/]$", "" );
 			var siteTemplate = _getSiteTemplateFromPath( directory );
 
@@ -229,23 +242,94 @@ component singleton=true {
 	}
 
 	private array function _getBundleFiles( required string bundleName, string language, string country ) {
-		if ( !StructKeyExists( arguments, "language" ) && !StructKeyExists( arguments, "country" ) ) {
-			return variables._bundleFileDiscoveryCache[ arguments.bundleName ] ?: [];
+		if ( _isDefaultLocale( argumentCollection=arguments ) ) {
+			return variables._bundleFileDiscoveryCache[ arguments.bundleName ] ?: _discoverOutlierBundleFiles( argumentCollection=arguments );
 		}
+
+		var languageFiles = variables._localeFileDiscoveryCache[ arguments.bundleName ][ arguments.language ] ?: _discoverOutlierBundleFiles( bundleName=arguments.bundleName, language=arguments.language );
 		if ( !StructKeyExists( arguments, "country" ) ) {
-			return variables._localeFileDiscoveryCache[ arguments.bundleName ][ arguments.language ] ?: [];
+			return languageFiles;
 		}
 
-		var files = variables._localeFileDiscoveryCache[ arguments.bundleName ][ arguments.language ] ?: [];
+		ArrayAppend( languageFiles, variables._localeFileDiscoveryCache[ arguments.bundleName ][ arguments.language & "_" & arguments.country ] ?: _discoverOutlierBundleFiles( argumentCollection=arguments ), true );
 
-		ArrayAppend( files, variables._localeFileDiscoveryCache[ arguments.bundleName ][ arguments.language & "_" & arguments.country ] ?: [], true );
+		return languageFiles;
+	}
 
-		return files;
+	private array function _discoverOutlierBundleFiles( required string bundleName, string language, string country ) {
+		var localeRegex     = "(_[a-z]{2})(_[A-Z]{2})?$";
+		var shouldWeBother  = ReFind( localeRegex, arguments.bundleName ); // we should only have missed files that accidentally match the language-country suffix pattern
+		var discoveredFiles = [];
+
+		if ( shouldWeBother ) {
+			var directories        = _getBundleDirectories();
+			var activeSiteTemplate = _getSiteService().getActiveSiteTemplate( emptyIfDefault=true );
+			var filePattern        = ListLast( arguments.bundleName, "." );
+			var siteTemplate       = "";
+			var subDirectory       = "";
+			var files              = "";
+			var directory          = "";
+			var file               = "";
+
+			if ( ListLen( arguments.bundleName, "." ) > 1 ) {
+				subDirectory = ListDeleteAt( arguments.bundleName, ListLen( arguments.bundleName, "." ), "." );
+				subDirectory = "/" & ListChangeDelims( subDirectory, "/", "." );
+			}
+
+			if ( StructKeyExists( arguments, "language" ) ) {
+				filePattern &= "_" & LCase( arguments.language );
+				if ( StructKeyExists( arguments, "country" ) ) {
+					filePattern &= "_" & UCase( arguments.country );
+				}
+			}
+
+			filePattern &= ".properties";
+
+			for( directory in directories ){
+				directory = ReReplace( directory, "[\\/]$", "" );
+
+				siteTemplate = _getSiteTemplateFromPath( directory );
+
+				if ( siteTemplate == "*" || siteTemplate == activeSiteTemplate ) {
+					files = DirectoryList( directory & subDirectory, false, "path", "*.properties" );
+
+					for( file in files ){
+						if ( filePattern == ListLast( file, "\/" ) ) {
+							ArrayAppend( discoveredFiles, file );
+						}
+					}
+				}
+			}
+		}
+
+		if ( StructKeyExists( arguments, "language" ) ) {
+			if ( StructKeyExists( arguments, "country" ) ) {
+				variables._localeFileDiscoveryCache[ arguments.bundleName ][ arguments.language & "_" & arguments.country ] = discoveredFiles;
+			} else {
+				variables._localeFileDiscoveryCache[ arguments.bundleName ][ arguments.language ] = discoveredFiles;
+			}
+		} else {
+			variables._bundleFileDiscoveryCache[ arguments.bundleName ] = discoveredFiles;
+		}
+
+		return discoveredFiles;
 	}
 
 	private void function _setBundleFileDiscoveryCache( required struct bundles, required struct locales ) {
 	    variables._bundleFileDiscoveryCache = arguments.bundles;
 	    variables._localeFileDiscoveryCache = arguments.locales;
+	}
+
+	private boolean function _isDefaultLocale( string language="", string country="" ) {
+		if ( !Len( Trim( arguments.language ) ) ) {
+			return true;
+		}
+		var locale = arguments.language;
+		if ( Len( Trim( arguments.country ) ) ) {
+			locale &= "_#arguments.country#";
+		}
+
+		return locale == _getDefaultLocale();
 	}
 
 // GETTERS AND SETTERS
@@ -282,5 +366,12 @@ component singleton=true {
 	}
 	private void function _setBundleDataCache( required struct bundleDataCache ) output=false {
 		_bundleDataCache = arguments.bundleDataCache;
+	}
+
+	private string function _getDefaultLocale() {
+	    return _defaultLocale;
+	}
+	private void function _setDefaultLocale( required string defaultLocale ) {
+	    _defaultLocale = arguments.defaultLocale;
 	}
 }

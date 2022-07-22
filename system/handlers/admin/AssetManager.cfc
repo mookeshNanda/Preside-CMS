@@ -14,6 +14,7 @@ component extends="preside.system.base.AdminHandler" {
 	property name="multilingualPresideObjectService" inject="multilingualPresideObjectService";
 	property name="assetQueueService"                inject="presidecms:dynamicservice:assetQueue";
 	property name="derivativeLimits"                 inject="coldbox:setting:assetManager.derivativeLimits";
+	property name="datatableSettings"                inject="coldbox:setting:assetManager.datatable";
 
 	function preHandler( event, rc, prc ) {
 		super.preHandler( argumentCollection = arguments );
@@ -80,6 +81,11 @@ component extends="preside.system.base.AdminHandler" {
 
 	function index( event, rc, prc ) {
 		_checkPermissions( argumentCollection=arguments, key="general.navigate" );
+
+		event.includeData( {
+			  defaultPageLength = datatableSettings.defaultPageLength ?: 10
+			, paginationOptions = datatableSettings.paginationOptions ?: [ 5, 10, 25, 50, 100 ]
+		} );
 
 		prc.folderTree    = assetManagerService.getFolderTree();
 		prc.trashCount    = assetManagerService.getTrashCount();
@@ -986,9 +992,11 @@ component extends="preside.system.base.AdminHandler" {
 
 		var allowedTypes = rc.allowedTypes ?: "";
 		var multiple     = rc.multiple     ?: "";
+		var folder       = rc.folder       ?: "";
 
 		prc.savedFilters = rc.savedFilters ?: "";
 		prc.allowedTypes = assetManagerService.expandTypeList( ListToArray( allowedTypes ) );
+		prc.loadMoreUrl  = event.buildAdminLink( linkto="assetmanager.assetPickerBrowserLoadMore", queryString="allowedtypes=#allowedTypes#&multiple=#multiple#&savedFilters=#prc.savedFilters#&folder=#folder#&page=" );
 
 		event.setLayout( "adminModalDialog" );
 
@@ -999,21 +1007,57 @@ component extends="preside.system.base.AdminHandler" {
 		);
 		if ( Len( Trim( rc.folder ?: "" ) ) ) {
 			prc.folderAncestors = assetManagerService.getFolderAncestors( id=rc.folder );
-			for( var f in prc.folderAncestors ){
-				event.addAdminBreadCrumb(
-					  title = f.label
-					, link  = event.buildAdminLink( linkTo="assetmanager.assetPickerBrowser", querystring="folder=#f.id#&allowedTypes=#allowedTypes#&savedFilters=#prc.savedFilters#&multiple=#multiple#" )
-				);
+
+			for( var i=prc.folderAncestors.recordCount; i>0; i-- ){
+				var f = queryRowToStruct( prc.folderAncestors, i );
+
+				if ( f.label != "$root" ) {
+					event.addAdminBreadCrumb(
+						  title = f.label
+						, link  = event.buildAdminLink( linkTo="assetmanager.assetPickerBrowser", querystring="folder=#f.id#&allowedTypes=#allowedTypes#&savedFilters=#prc.savedFilters#&multiple=#multiple#" )
+					);
+				}
 			}
 
 			prc.folder = assetManagerService.getFolder( id=rc.folder );
-			if ( prc.folder.recordCount ){
+			if ( prc.folder.recordCount && prc.folder.label != "$root" ){
 				event.addAdminBreadCrumb(
 					  title = prc.folder.label
 					, link  = event.buildAdminLink( linkTo="assetmanager.assetPickerBrowser", querystring="folder=#prc.folder.id#&allowedTypes=#allowedTypes#&savedFilters=#prc.savedFilters#&multiple=#multiple#" )
 				);
 			}
 		}
+	}
+
+	function assetPickerBrowserLoadMore( event, rc, prc ) {
+		_checkPermissions( argumentCollection=arguments, key="assets.pick" );
+
+		var allowedTypes = rc.allowedTypes ?: "";
+		var multiple     = rc.multiple     ?: "";
+		var savedFilters = rc.savedFilters ?: "";
+		var allowedTypes = assetManagerService.expandTypeList( ListToArray( allowedTypes ) );
+		var activeFolder = Trim( rc.folder  ?: "" );
+		var assetFilter = { asset_folder = activeFolder, is_trashed=0 };
+		var page        = Val( rc.page ?: 2 );
+		if ( page < 1 ) {
+			page = 2;
+		}
+		var pageSize = 10;
+		var startRow = ( ( pageSize * page ) + 1 ) - pageSize;
+
+		if ( allowedTypes.len() ){
+			assetFilter.asset_type = allowedTypes;
+		}
+
+		return renderView(
+			  view          = "admin/assetManager/_assetBrowserListingForPicker"
+			, presideObject = "asset"
+			, filter        = assetFilter
+			, savedFilters  = listToArray( savedFilters )
+			, orderBy       = "title asc"
+			, maxRows       = pageSize
+			, startRow      = startRow
+		);
 	}
 
 	function assetPickerUploader( event, rc, prc ) {

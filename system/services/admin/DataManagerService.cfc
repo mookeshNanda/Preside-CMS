@@ -9,6 +9,8 @@ component {
 
 	variables._operationsCache = {};
 
+	property name="dataManagerDefaults" inject="coldbox:setting:dataManager.defaults";
+
 // CONSTRUCTOR
 
 	/**
@@ -244,6 +246,19 @@ component {
 		return _operationsCache[ arguments.objectName ];
 	}
 
+	public boolean function canBatchSelectAll( required string objectName ) {
+		if ( !$isFeatureEnabled( "batchOperationSelectAll" ) ) {
+			return false;
+		}
+
+		var canSelectAll = _getPresideObjectService().getObjectAttribute(
+			  objectName    = arguments.objectName
+			, attributeName = "datamanagerAllowBatchSelectAll"
+		);
+
+		return !IsBoolean( canSelectAll ) || canSelectAll;
+	}
+
 	public string function getDefaultOperationsForObject( required string objectName ) {
 		var defaults = [ "read", "add", "edit", "batchedit", "delete", "batchdelete" ];
 
@@ -452,7 +467,8 @@ component {
 			args.selectFields.append( "#dbAdapter.getCountOverWindowFunctionSql()# as _total_recordcount" );
 		}
 
-		result.records = _getPresideObjectService().selectData( argumentCollection=args );
+		result.records        = _getPresideObjectService().selectData( argumentCollection=args );
+		result.selectDataArgs = StructCopy( args );
 
 		if ( arguments.startRow == 1 && result.records.recordCount < arguments.maxRows ) {
 			result.totalRecords = result.records.recordCount;
@@ -511,79 +527,6 @@ component {
 
 		return result;
 	}
-
-	public boolean function batchEditField(
-		  required string objectName
-		, required string fieldName
-		, required array  sourceIds
-		, required string value
-		,          string multiEditBehaviour = "append"
-		,          string auditAction        = "datamanager_batch_edit_record"
-		,          string auditCategory      = "datamanager"
-	) {
-		var pobjService  = _getPresideObjectService();
-		var isMultiValue = pobjService.isManyToManyProperty( arguments.objectName, arguments.fieldName );
-
-		transaction {
-			for( var sourceId in sourceIds ) {
-				if ( !isMultiValue ) {
-					pobjService.updateData(
-						  objectName = objectName
-						, data       = { "#arguments.fieldName#" = value }
-						, filter     = { id=sourceId }
-					);
-				} else {
-					var existingIds  = [];
-					var targetIdList = [];
-					var newChoices   = ListToArray( arguments.value );
-
-					if ( arguments.multiEditBehaviour != "overwrite" ) {
-						var previousData = pobjService.getDeNormalizedManyToManyData(
-							  objectName   = objectName
-							, id           = sourceId
-							, selectFields = [ arguments.fieldName ]
-						);
-						existingIds = ListToArray( previousData[ arguments.fieldName ] ?: "" );
-					}
-
-					switch( arguments.multiEditBehaviour ) {
-						case "overwrite":
-							targetIdList = newChoices;
-							break;
-						case "delete":
-							targetIdList = existingIds;
-							for( var id in newChoices ) {
-								targetIdList.delete( id )
-							}
-							break;
-						default:
-							targetIdList = existingIds;
-							targetIdList.append( newChoices, true );
-					}
-
-					targetIdList = targetIdList.toList();
-					targetIdList = ListRemoveDuplicates( targetIdList );
-
-					pobjService.updateData(
-						  objectName              = objectName
-						, id                      = sourceId
-						, data                    = { "#updateField#" = targetIdList }
-						, updateManyToManyRecords = true
-					);
-				}
-
-				$audit(
-					  action   = arguments.auditAction
-					, type     = arguments.auditCategory
-					, recordId = sourceid
-					, detail   = Duplicate( arguments )
-				);
-			}
-		}
-
-		return true;
-	}
-
 
 	public array function getRecordsForAjaxSelect(
 		  required string  objectName
@@ -673,19 +616,22 @@ component {
 
 	public string function getPrefetchCachebusterForAjaxSelect( required string objectName, string labelRenderer="" ) {
 		var obj               = _getPresideObjectService().getObject( arguments.objectName );
-		var dmField           = obj.getDateModifiedField();
 		var lastModified      = Now();
 		var rendererCacheDate = _getLabelRendererService().getRendererCacheDate( labelRenderer );
 		var recordCount       = 0;
 
-		if ( StructKeyExists( _getPresideObjectService().getObjectProperties( arguments.objectName ), dmField ) ) {
-			var records = obj.selectData(
-				selectFields = [ "Max( #dmField# ) as lastmodified", "count(1) as _total_rowcount" ]
-			);
+		if ( not isSimpleValue( obj ) ) {
+			var dmField = obj.getDateModifiedField();
 
-			if ( IsDate( records.lastmodified ) ) {
-				lastModified = records.lastmodified;
-				recordCount  = records._total_rowcount;
+			if ( StructKeyExists( _getPresideObjectService().getObjectProperties( arguments.objectName ), dmField ) ) {
+				var records = obj.selectData(
+					selectFields = [ "Max( #dmField# ) as lastmodified", "count(1) as _total_rowcount" ]
+				);
+
+				if ( IsDate( records.lastmodified ) ) {
+					lastModified = records.lastmodified;
+					recordCount  = records._total_rowcount;
+				}
 			}
 		}
 
@@ -910,6 +856,56 @@ component {
 		return _getPresideObjectService().getObjectAttribute( objectName=arguments.objectName, attributeName="dataManagerExportPermissionKey", defaultValue="read" );
 	}
 
+	public string function getSaveExportPermissionKey( required string objectName ) {
+		return _getPresideObjectService().getObjectAttribute( objectName=arguments.objectName, attributeName="dataManagerSaveExportPermissionKey", defaultValue="read" );
+	}
+
+	public boolean function useTypedConfirmationForDeletion( required string objectName ) {
+		var result = _getPresideObjectService().getObjectAttribute(
+			  objectName    = arguments.objectName
+			, attributeName = "datamanagerTypeToConfirmDelete"
+			, defaultValue  = IsBoolean( dataManagerDefaults.typeToConfirmDelete ?: "" ) && dataManagerDefaults.typeToConfirmDelete
+		);
+
+		return IsBoolean( result ) && result;
+	}
+
+	public boolean function useTypedConfirmationForBatchDeletion( required string objectName ) {
+		var result = _getPresideObjectService().getObjectAttribute(
+			  objectName    = arguments.objectName
+			, attributeName = "datamanagerTypeToConfirmBatchDelete"
+			, defaultValue  = IsBoolean( dataManagerDefaults.typeToConfirmBatchDelete ?: "" ) && dataManagerDefaults.typeToConfirmBatchDelete
+		);
+
+		return IsBoolean( result ) && result;
+	}
+
+	public string function getDeletionConfirmationMatch( required string objectName, required struct record ) {
+		if ( _getCustomizationService().objectHasCustomization( arguments.objectName, "getRecordDeletionPromptMatch" ) ) {
+			var result = _getCustomizationService().runCustomization(
+				  objectName = arguments.objectName
+				, action     = "getRecordDeletionPromptMatch"
+				, args       = { record=arguments.record }
+			);
+
+			if ( Len( local.result ?: "" ) ) {
+				return result;
+			}
+		}
+
+		var defaultMatch = $translateResource( uri="cms:datamanager.delete.record.match", defaultValue="delete" );
+		var objectUri    = _getPresideObjectService().getResourceBundleUriRoot( arguments.objectname ) & "delete.record.match";
+
+		return $translateResource( uri=objectUri, defaultValue=defaultMatch );
+	}
+
+	public string function getBatchDeletionConfirmationMatch( required string objectName ) {
+		var objectUri  = _getPresideObjectService().getResourceBundleUriRoot( arguments.objectname ) & "batch.delete.records.match";
+		var defaultUri = "cms:datamanager.batch.delete.records.match";
+
+		return $translateResource( uri=objectUri, defaultValue=$translateResource( defaultUri ) );
+	}
+
 // PRIVATE HELPERS
 	private array function _prepareGridFieldsForSqlSelect( required array gridFields, required string objectName, boolean versionTable=false, boolean draftsEnabled=areDraftsEnabledForObject( arguments.objectName ) ) {
 		var sqlFields                = Duplicate( arguments.gridFields );
@@ -925,9 +921,13 @@ component {
 		var dateModifiedField        = obj.getDateModifiedField();
 		var labelFieldIsRelationship = ( props[ labelField ].relationship ?: "" ) contains "-to-";
 		var replacedLabelField       = !Find( ".", labelField ) ? "#objName#.${labelfield} as #ListLast( labelField, '.' )#" : "${labelfield} as #labelField#";
+		var objectHasIdField         = booleanFormat( len( trim( _getPresideObjectService().getIdField( objectName=arguments.objectName ) ) ) );
 
-		sqlFields.delete( "id" );
-		sqlFields.append( "#objName#.#idField# as id" );
+		if ( objectHasIdField ) {
+			sqlFields.delete( "id" );
+			sqlFields.append( "#objName#.#idField# as id" );
+		}
+
 		if ( !labelFieldIsRelationship && ListLen( labelField, "." ) < 2 && sqlFields.find( labelField ) ) {
 			sqlFields.delete( labelField );
 			sqlFields.append( replacedLabelField );

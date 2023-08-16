@@ -25,6 +25,7 @@ component {
 			, adminBaseUrl = event.getAdminPath()
 			, siteId       = event.getSiteId()
 		} );
+
 		event.includeData( event.getCollection() );
 
 		event.addAdminBreadCrumb(

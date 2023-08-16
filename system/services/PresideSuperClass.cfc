@@ -17,6 +17,7 @@ component displayName="Preside Super Class" {
 	 * @websitePermissionService.inject   delayedInjector:websitePermissionService
 	 * @emailService.inject               delayedInjector:emailService
 	 * @errorLogService.inject            delayedInjector:errorLogService
+	 * @systemAlertsService.inject        delayedInjector:systemAlertsService
 	 * @featureService.inject             delayedInjector:featureService
 	 * @notificationService.inject        delayedInjector:notificationService
 	 * @auditService.inject               delayedInjector:auditService
@@ -29,6 +30,7 @@ component displayName="Preside Super Class" {
 	 * @i18n.inject                       delayedInjector:i18n
 	 * @htmlHelper.inject                 delayedInjector:HTMLHelper@coldbox
 	 * @healthcheckService.inject         delayedInjector:healthcheckService
+	 * @sqlRunner.inject                  delayedInjector:sqlRunner
 	 * @presideHelperClass.inject         presideHelperClass
 	 *
 	 */
@@ -42,6 +44,7 @@ component displayName="Preside Super Class" {
 		, required any websitePermissionService
 		, required any emailService
 		, required any errorLogService
+		, required any systemAlertsService
 		, required any featureService
 		, required any notificationService
 		, required any auditService
@@ -54,6 +57,7 @@ component displayName="Preside Super Class" {
 		, required any i18n
 		, required any htmlHelper
 		, required any healthcheckService
+		, required any sqlRunner
 		, required any presideHelperClass
 	) {
 		$presideObjectService       = arguments.presideObjectService;
@@ -65,6 +69,7 @@ component displayName="Preside Super Class" {
 		$websitePermissionService   = arguments.websitePermissionService;
 		$emailService               = arguments.emailService;
 		$errorLogService            = arguments.errorLogService;
+		$systemAlertsService        = arguments.systemAlertsService;
 		$featureService             = arguments.featureService;
 		$notificationService        = arguments.notificationService;
 		$auditService               = arguments.auditService;
@@ -77,13 +82,14 @@ component displayName="Preside Super Class" {
 		$i18n                       = arguments.i18n;
 		$htmlHelper                 = arguments.htmlHelper;
 		$healthcheckService         = arguments.healthcheckService;
+		$sqlRunner                  = arguments.sqlRunner;
 
 		this.$helpers = arguments.presideHelperClass;
 
 		return this;
 	}
 
-// PRESIDE OBJECTS
+// PRESIDE OBJECTS & DB THINGS
 	/**
 	 * Returns an instance of the [[api-presideobjectservice]]. For example:
      * \n
@@ -114,6 +120,14 @@ component displayName="Preside Super Class" {
 	 */
 	public any function $getPresideObject() {
 		return $presideObjectService.getObject( argumentCollection=arguments );
+	}
+
+	public string function $obfuscateSqlForPreside() {
+		return $sqlRunner.obfuscateSqlForPreside( argumentCollection=arguments );
+	}
+
+	public string function $deObfuscateSql() {
+		return $sqlRunner.deObfuscateSql( argumentCollection=arguments );
 	}
 
 // SYSTEM CONFIG SERVICE
@@ -495,6 +509,41 @@ component displayName="Preside Super Class" {
 	 */
 	public any function $raiseError() {
 		return $getErrorLogService().raiseError( argumentCollection=arguments );
+	}
+
+// SYSTEM ALERTS
+	/**
+	 * Returns an instance of the [[api-systemalertsservice]]. This service
+	 * can be used to raise and query system alerts.
+	 * \n
+	 * ## Example
+	 * \n
+	 * ```luceescript
+	 * $getSystemAlertsService().getAlert( id );
+	 * ```
+	 *
+	 * @autodoc
+	 *
+	 */
+	public any function $getSystemAlertsService() {
+		return $systemAlertsService;
+	}
+
+	/**
+	 * Proxy to the [[systemalertsservice-runcheck]] method of the [[api-systemalertsservice]].
+	 * Runs an alert check for the specified type and (optional) reference.
+	 * \n
+	 * ## Example
+	 * \n
+	 * ```luceescript
+	 * $runSystemAlertCheck( type="emailCentreSettings" );
+	 * ```
+	 *
+	 * @autodoc
+	 *
+	 */
+	public any function $runSystemAlertCheck( required string type, string reference="", boolean async=true, string trigger="code" ) {
+		return $getSystemAlertsService().runcheck( argumentCollection=arguments );
 	}
 
 // PRESIDE FEATURES

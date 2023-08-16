@@ -2,8 +2,9 @@
 	<cfscript>
 		prc.hasCmsPageEditPermissions = prc.hasCmsPageEditPermissions ?: hasCmsPermission( permissionKey="sitetree.edit", context="page", contextKeys=event.getPagePermissionContext() );
 
+		event.include( "/js/admin/presidecore/" );
+
 		if ( prc.hasCmsPageEditPermissions ) {
-			event.include( "/js/admin/presidecore/" );
 			event.include( "/js/admin/frontend/" );
 			event.includeData({
 				  ajaxEndpoint = event.buildAdminLink( linkTo="ajaxProxy.index" )
@@ -28,7 +29,7 @@
 
 		userMenu          = renderView( "/admin/layout/userMenu" );
 		notificationsMenu = renderViewlet( "admin.notifications.notificationNavPromo" );
-
+		systemAlertsMenu  = renderViewlet( "admin.systemAlerts.systemAlertsMenuItem" );
 
 		ckEditorJs = renderView( "admin/layout/ckeditorjs" );
 
@@ -107,6 +108,7 @@
 									&nbsp;
 								</li>
 							</cfif>
+							#systemAlertsMenu#
 							<li>#notificationsMenu#</li>
 							<li>#userMenu#</li>
 						</ul>

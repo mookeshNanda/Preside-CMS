@@ -1,34 +1,45 @@
 component {
 	property name="applicationReloadService"      inject="applicationReloadService";
-	property name="databaseMigrationService"      inject="databaseMigrationService";
+	property name="coreDatabaseMigrationService"  inject="coreDatabaseMigrationService";
+	property name="appDatabaseMigrationService"   inject="appDatabaseMigrationService";
 	property name="applicationsService"           inject="applicationsService";
 	property name="websiteLoginService"           inject="websiteLoginService";
 	property name="adminLoginService"             inject="loginService";
 	property name="antiSamySettings"              inject="coldbox:setting:antiSamy";
 	property name="antiSamyService"               inject="delayedInjector:antiSamyService";
 	property name="presideTaskmanagerHeartBeat"   inject="presideTaskmanagerHeartBeat";
+	property name="presideSystemAlertsHeartBeat"  inject="presideSystemAlertsHeartBeat";
 	property name="cacheboxReapHeartBeat"         inject="cacheboxReapHeartBeat";
 	property name="presideAdhocTaskHeartBeat"     inject="presideAdhocTaskHeartBeat";
 	property name="presideSessionReapHeartbeat"   inject="presideSessionReapHeartbeat";
 	property name="scheduledExportHeartBeat"      inject="scheduledExportHeartBeat";
+	property name="segmentationFiltersHeartbeat"  inject="segmentationFiltersHeartbeat";
 	property name="healthcheckService"            inject="healthcheckService";
 	property name="permissionService"             inject="permissionService";
+	property name="dataExportTemplateService"     inject="dataExportTemplateService";
 	property name="emailQueueConcurrency"         inject="coldbox:setting:email.queueConcurrency";
 	property name="assetQueueConcurrency"         inject="coldbox:setting:assetManager.queue.concurrency";
 	property name="presideObjectService"          inject="delayedInjector:presideObjectService";
 	property name="presideFieldRuleGenerator"     inject="delayedInjector:presideFieldRuleGenerator";
 	property name="configuredValidationProviders" inject="coldbox:setting:validationProviders";
 	property name="validationEngine"              inject="validationEngine";
+	property name="systemAlertsService"           inject="systemAlertsService";
+	property name="emailTemplateService"          inject="emailTemplateService";
+	property name="systemEmailTemplateService"    inject="systemEmailTemplateService";
 
 	public void function applicationStart( event, rc, prc ) {
 		prc._presideReloaded = true;
 
-		_performDbMigrations();
-		_configureVariousServices();
+		_configureVariousServices(); // important for this to happen first
 		_populateDefaultLanguages();
 		_setupCatchAllAdminUserGroup();
 		_startHeartbeats();
 		_setupValidators();
+		_performDbMigrations();
+		systemAlertsService.runStartupChecks();
+		emailTemplateService.ensureSystemTemplatesHaveDbEntries();
+		systemEmailTemplateService.applicationStart();
+
 
 		announceInterception( "onApplicationStart" );
 	}
@@ -64,6 +75,10 @@ component {
 
 		event.setLayout( notFoundLayout );
 		event.setView( view="/core/simpleBodyRenderer" );
+
+		if ( isFeatureEnabled( "fullPageCaching" ) ) {
+			event.cachePage( false );
+		}
 
 		rc.body = renderViewlet( event=notFoundViewlet );
 	}
@@ -208,7 +223,17 @@ component {
 	}
 
 	private void function _performDbMigrations() {
-		databaseMigrationService.migrate();
+		coreDatabaseMigrationService.migrate();
+		appDatabaseMigrationService.doMigrations();
+		createTask(
+			  event             = "general._performAsyncDbMigrations"
+			, runIn             = CreateTimespan( 0, 0, 1, 0 ) // one minute, at least
+			, discardOnComplete = true
+		);
+	}
+
+	private void function _performAsyncDbMigrations() {
+		appDatabaseMigrationService.doMigrations( async=true );
 	}
 
 	private void function _populateDefaultLanguages() {
@@ -225,6 +250,9 @@ component {
 		if ( Len( Trim( request.DefaultLocaleFromCookie ?: "" ) ) ) {
 			i18n.setFwLocale( request.DefaultLocaleFromCookie );
 		}
+
+		dataExportTemplateService.setupTemplatesEnum();
+		systemAlertsService.setupSystemAlerts();
 	}
 
 	private void function _startHeartbeats() {
@@ -248,6 +276,10 @@ component {
 			presideTaskmanagerHeartBeat.start();
 		}
 
+		if ( isFeatureEnabled( "systemAlertsHeartBeat" ) ) {
+			presideSystemAlertsHeartBeat.start();
+		}
+
 		if ( isFeatureEnabled( "presideSessionManagement" ) ) {
 			presideSessionReapHeartbeat.start();
 		}
@@ -260,6 +292,10 @@ component {
 
 		if ( isFeatureEnabled( "dataExport" ) && isFeatureEnabled( "scheduledExportHeartBeat" ) ) {
 			scheduledExportHeartBeat.start();
+		}
+
+		if ( isFeatureEnabled( "rulesEngine" ) && isFeatureEnabled( "segmentationFiltersHeartbeat" ) ) {
+			segmentationFiltersHeartbeat.start();
 		}
 
 		cacheboxReapHeartBeat.start();

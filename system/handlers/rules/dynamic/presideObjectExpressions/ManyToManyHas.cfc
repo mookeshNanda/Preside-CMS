@@ -11,17 +11,12 @@ component extends="preside.system.base.AutoObjectExpressionHandler" {
 	private boolean function evaluateExpression(
 		  required string  objectName
 		, required string  propertyName
-		,          string  parentObjectName   = ""
-		,          string  parentPropertyName = ""
 		,          boolean _possesses         = true
 		,          string  savedFilter        = ""
 	) {
-		var sourceObject = parentObjectName.len() ? parentObjectName : objectName;
-		var recordId     = payload[ sourceObject ].id ?: "";
-
 		return presideObjectService.dataExists(
-			  objectName   = sourceObject
-			, id           = recordId
+			  objectName   = arguments.objectName
+			, id           = payload[ arguments.objectName ].id ?: ""
 			, extraFilters = prepareFilters( argumentCollection=arguments )
 		);
 	}
@@ -29,69 +24,60 @@ component extends="preside.system.base.AutoObjectExpressionHandler" {
 	private array function prepareFilters(
 		  required string  objectName
 		, required string  propertyName
-		,          string  parentObjectName   = ""
-		,          string  parentPropertyName = ""
-		,          string  filterPrefix       = ""
 		,          boolean _possesses         = true
 		,          string  savedFilter        = ""
 	){
+		var params               = {};
 		var subQueryExtraFilters = [];
+		var propAttributes       = presideObjectService.getObjectProperty( arguments.objectname, arguments.propertyname );
+		var keyFk                = propAttributes.relationshipIsSource ? propAttributes.relatedViaSourceFk : propAttributes.relatedViaTargetFk;
+		var valueFk              = propAttributes.relationshipIsSource ? propAttributes.relatedViaTargetFk : propAttributes.relatedViaSourceFk;
+		var outerPk              = "#arguments.objectName#.#presideObjectService.getIdField( arguments.objectName )#";
+		var exists               = arguments._possesses ? "exists" : "not exists";
+		var subquery             = {};
+
 		if ( Len( Trim( arguments.savedFilter ) ) ) {
-			var expressionArray = filterService.getExpressionArrayForSavedFilter( arguments.savedFilter );
-			if ( expressionArray.len() ) {
-				subQueryExtraFilters.append(
-					filterService.prepareFilter(
-						  objectName      = arguments.relatedTo
-						, expressionArray = expressionArray
-						, filterPrefix    = arguments.propertyName
-					)
-				);
-			}
-		}
-
-		var objIdField = presideObjectService.getIdField( arguments.objectName );
-		var subQuery = presideObjectService.selectData(
-			  objectName          = arguments.objectName
-			, selectFields        = [ "Count( #propertyName#.#objIdField# ) as manytomany_count", "#objectName#.#objIdField# as id" ]
-			, groupBy             = "#objectName#.#objIdField#"
-			, extraFilters        = subQueryExtraFilters
-			, getSqlAndParamsOnly = true
-		);
-
-		var subQueryAlias = "manyToManyHas" & CreateUUId().lCase().replace( "-", "", "all" );
-		var paramName     = subQueryAlias;
-		var filterSql     = "";
-		var params        = {};
-
-		for( var param in subQuery.params ) {
-			params[ param.name ] = param;
-			params[ param.name ].delete( "name" );
-		}
-
-		if ( _possesses ) {
-			filterSql = "( #subQueryAlias#.manytomany_count is not null and #subQueryAlias#.manytomany_count > 0 )";
+			subquery  = presideObjectService.selectData(
+				  objectName          = propAttributes.relatedTo
+				, selectFields        = [ "1" ]
+				, filter              = obfuscateSqlForPreside( "#propAttributes.relatedVia#.#keyfk# = #outerPk#" )
+				, getSqlAndParamsOnly = true
+				, formatSqlParams     = true
+				, extraFilters        = [ filterService.prepareFilter( propAttributes.relatedTo, arguments.savedFilter ) ]
+				, extraJoins          = [ {
+					  type             = "inner"
+					, tableName        = presideObjectService.getTableName( propAttributes.relatedVia )
+					, tableAlias       = propAttributes.relatedVia
+					, tableColumn      = valueFk
+					, joinToTable      = propAttributes.relatedTo
+					, joinToColumn     = presideObjectService.getIdField( propAttributes.relatedTo )
+				}]
+			);
 		} else {
-			filterSql = "( #subQueryAlias#.manytomany_count is null or #subQueryAlias#.manytomany_count = 0 )";
+			subquery  = presideObjectService.selectData(
+				  objectName          = propAttributes.relatedVia
+				, selectFields        = [ "1" ]
+				, filter              = obfuscateSqlForPreside( "#keyfk# = #outerPk#" )
+				, extraFilters        = subQueryExtraFilters
+				, getSqlAndParamsOnly = true
+				, formatSqlParams     = true
+			);
 		}
 
-		var prefix = filterPrefix.len() ? filterPrefix : ( parentPropertyName.len() ? parentPropertyName : objectName );
+		StructAppend( params, subquery.params );
 
-		return [ { filter=filterSql, filterParams=params, extraJoins=[ {
-			  type           = "left"
-			, subQuery       = subQuery.sql
-			, subQueryAlias  = subQueryAlias
-			, subQueryColumn = "id"
-			, joinToTable    = prefix
-			, joinToColumn   = objIdField
-		} ] } ];
+		return [ {
+			  filter = obfuscateSqlForPreside( "#exists# (#subquery.sql#)" )
+			, filterParams = params
+		}];
 	}
 
 	private string function getLabel(
-		  required string  objectName
-		, required string  propertyName
-		, required string  relatedTo
-		,          string  parentObjectName   = ""
-		,          string  parentPropertyName = ""
+		  required string objectName
+		, required string propertyName
+		, required string relatedTo
+		,          string parentObjectName   = ""
+		,          string parentPropertyName = ""
 	) {
 		var objectBaseUri        = presideObjectService.getResourceBundleUriRoot( objectName );
 		var objectNameTranslated = translateResource( objectBaseUri & "title.singular", objectName );

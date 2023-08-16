@@ -42,6 +42,7 @@ component extends="resources.HelperObjects.PresideBddTestCase" {
 				};
 				var mockResult = CreateUUId();
 
+				mockDataExportTemplateService.$( "getSelectFields", defaultFields.selectFields );
 				mockPresideObjectService.$( "getObjectProperties", {} );
 				mockPresideObjectService.$( "getObjectAttribute", "" );
 				mockColdbox.$( "handlerExists" ).$args( exporterHandler ).$results( true );
@@ -124,6 +125,7 @@ component extends="resources.HelperObjects.PresideBddTestCase" {
 				};
 				var mockResult = CreateUUId();
 
+				mockDataExportTemplateService.$( "getSelectFields", defaultFields.selectFields );
 				mockPresideObjectService.$( "getObjectProperties", {} );
 				mockPresideObjectService.$( "getObjectAttribute", "" );
 				mockColdbox.$( "handlerExists" ).$args( exporterHandler ).$results( true );
@@ -265,8 +267,17 @@ component extends="resources.HelperObjects.PresideBddTestCase" {
 		mockDataExporterReader = createEmptyMock( "preside.system.services.dataExport.DataExporterReader" );
 		mockDataExporterReader.$( "readExportersFromDirectories", arguments.exporters );
 
+		mockDataExportTemplateService = createEmptyMock( "preside.system.services.dataExport.DataExportTemplateService" );
+		mockDataExportTemplateService.$( "templateMethodExists", false );
+		mockDataExportTemplateService.$( "prepareSelectDataArgs" );
+		mockDataExportTemplateService.$( "prepareFieldTitles", {} );
+		mockDataExportTemplateService.$( "getExportMeta", {} );
+
 		mockCustomizationService = createEmptyMock( "preside.system.services.admin.DataManagerCustomizationService" );
 		mockCustomizationService.$( "runCustomization" );
+
+		mockScheduledExportService = createEmptyMock( "preside.system.services.dataExport.ScheduledExportService" );
+		mockScheduledExportService.$( "saveNumberOfRecordsToHistoryExport" );
 
 		mockPresideObjectService = createEmptyMock( "preside.system.services.presideObjects.PresideObjectService" );
 		mockColdbox              = createStub();
@@ -274,6 +285,8 @@ component extends="resources.HelperObjects.PresideBddTestCase" {
 		var service = createMock( object=new preside.system.services.dataExport.DataExportService(
 			    dataExporterReader              = mockDataExporterReader
 			  , dataManagerCustomizationService = mockCustomizationService
+			  , dataExportTemplateService       = mockDataExportTemplateService
+			  , scheduledExportService          = mockScheduledExportService
 		) );
 
 		service.$( "$getPresideObjectService", mockPresideObjectService );

@@ -11,6 +11,8 @@ component {
 	private string function siteAlerts( event, rc, prc, args={} ) {
 		args.inMaintenanceMode = maintenanceModeService.isMaintenanceModeActive();
 
+		runEvent( event="admin.systemAlerts.displayCriticalAlerts", private=true, prePostExempt=true );
+
 		return renderView( view="/admin/layout/siteAlerts", args=args );
 	}
 
@@ -121,7 +123,7 @@ component {
 		var app = args.app ?: "";
 
 		args.append({
-			  link        = applicationsService.getDefaultUrl( applicationId=app, siteId=event.getSiteId() )
+			  link        = event.buildLink( linkTo=applicationsService.getDefaultEvent( app ) )
 			, title       = translateResource( uri="applications:#app#.title"      , defaultValue=app )
 			, description = translateResource( uri="applications:#app#.description", defaultValue="" )
 			, iconClass   = translateResource( uri="applications:#app#.iconClass"  , defaultValue="fa-desktop" )

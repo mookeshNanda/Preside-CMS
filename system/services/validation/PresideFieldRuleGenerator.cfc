@@ -5,15 +5,18 @@ component output="false" singleton=true {
 	 * @resourceBundleService.inject ResourceBundleService
 	 * @presideObjectService.inject  PresideObjectService
 	 * @assetManagerService.inject   AssetManagerService
+	 * @interceptorService.inject    coldbox:InterceptorService
 	 */
 	public any function init(
 		  required any resourceBundleService
 		, required any presideObjectService
 		, required any assetManagerService
+		, required any interceptorService
 	) output=false {
 		_setResourceBundleService( arguments.resourceBundleService );
 		_setPresideObjectService( arguments.presideObjectService );
 		_setAssetManagerService( arguments.assetManagerService );
+		_setInterceptorService( arguments.interceptorService );
 
 		return this;
 	}
@@ -100,6 +103,9 @@ component output="false" singleton=true {
 		param name="arguments.fieldAttributes.generator" default="";
 		param name="arguments.fieldAttributes.type"      default="string";
 
+		var interceptorArgs = arguments;
+		_announceInterception( "preRulesForField", interceptorArgs );
+
 		var field = arguments.fieldAttributes;
 		var rules = [];
 		var index = "";
@@ -144,6 +150,8 @@ component output="false" singleton=true {
 					} else {
 						ArrayAppend( rules, { fieldName=arguments.fieldName, validator=Trim( field.format ) } );
 					}
+				} else if ( StructKeyExists( field, "dbtype" ) and ( field.dbtype == "text" ) ) {
+					ArrayAppend( rules, { fieldName=arguments.fieldName, validator="maxLength", params={ length = 65535 } } );
 				}
 			break;
 		}
@@ -195,6 +203,15 @@ component output="false" singleton=true {
 			}
 		}
 
+		// foreign key
+		if ( StructKeyExists( field, "relationship" )  && field.relationship != "none" && StructKeyExists( field, "relatedTo" ) && field.relatedTo != "none" && !poService.isOneToManyConfiguratorObject( field.relatedTo ) ) {
+			ArrayAppend( rules, {
+				  fieldName = arguments.fieldName
+				, validator = "presideObjectForeignKey"
+				, params    = { relatedTo=arguments.fieldAttributes.relatedTo, bypassTenants=arguments.fieldAttributes.bypassTenants ?: "" }
+			} );
+		}
+
 		// password policies
 		if ( Len( Trim( field.passwordPolicyContext ?: "" ) ) ) {
 			ArrayAppend( rules, { fieldName=arguments.fieldName, validator="meetsPasswordPolicy", params={ passwordPolicyContext = field.passwordPolicyContext } } );
@@ -204,6 +221,9 @@ component output="false" singleton=true {
 		if ( Len( Trim( field.enum ?: "" ) ) ) {
 			ArrayAppend( rules, { fieldName=arguments.fieldName, validator="enum", params={ enum=field.enum, multiple=( IsBoolean( field.multiple ?: "" ) && field.multiple ) } } );
 		}
+
+		interceptorArgs.rules = rules;
+		_announceInterception( "postRulesForField", interceptorArgs );
 
 		for( rule in rules ){
 			if ( not StructKeyExists( rule, "message" ) ) {
@@ -268,6 +288,12 @@ component output="false" singleton=true {
 		return ArrayToList( fields );
 	}
 
+	private any function _announceInterception( required string state, struct interceptData={} ) {
+		_getInterceptorService().processState( argumentCollection=arguments );
+
+		return interceptData.interceptorResult ?: {};
+	}
+
 // GETTERS AND SETTERS
 	private any function _getResourceBundleService() output=false {
 		return _resourceBundleService;
@@ -288,5 +314,12 @@ component output="false" singleton=true {
 	}
 	private void function _setAssetManagerService( required any assetManagerService ) output=false {
 		_assetManagerService = arguments.assetManagerService;
+	}
+
+	private any function _getInterceptorService() {
+		return _interceptorService;
+	}
+	private void function _setInterceptorService( required any IiterceptorService ) {
+		_interceptorService = arguments.IiterceptorService;
 	}
 }

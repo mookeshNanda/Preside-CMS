@@ -5,8 +5,9 @@
 component extends="BaseAdapter" {
 
 // CONSTRUCTOR
-	public any function init( required query dbInfo, required boolean useVarcharMaxForText ) {
-		_setDbInfo( arguments.dbInfo );
+	public any function init( required boolean useVarcharMaxForText ) {
+		super.init( argumentCollection=arguments );
+
 		_setUseVarcharMaxForText( arguments.useVarcharMaxForText );
 
 		return this;
@@ -287,14 +288,19 @@ component extends="BaseAdapter" {
 			sql &= " having " & arguments.having;
 		}
 
+		sql = applyOrderByAndMaxRowsSql( sql=sql, orderBy=arguments.orderBy, maxRows=arguments.maxRows, startRow=arguments.startRow );
+
+		return sql;
+	}
+
+	public string function applyOrderByAndMaxRowsSql( required string sql, string orderBy="", numeric maxRows=0, numeric startRow=1 ) {
+		var sql = arguments.sql;
 		if ( Len( Trim ( arguments.orderBy ) )  && !arguments.maxRows ) {
 			sql &= " order by " & arguments.orderBy;
 		}
-
 		if ( arguments.maxRows ) {
 			sql = "select * from ( " & sql & " ) as recordset where _rownumber between #( arguments.startRow )# and #( ( arguments.startRow + arguments.maxRows ) - 1 )#";
 		}
-
 		return sql;
 	}
 

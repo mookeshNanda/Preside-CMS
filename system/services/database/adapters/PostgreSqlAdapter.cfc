@@ -4,13 +4,6 @@
  */
 component extends="BaseAdapter" {
 
-// CONSTRUCTOR
-	public any function init( required query dbInfo ) {
-		_setDbInfo( arguments.dbInfo );
-
-		return this;
-	}
-
 // PUBLIC API METHODS
 	public string function escapeEntity( required string entityName ) {
 		var escaped = '"#lcase(arguments.entityName)#"';
@@ -303,14 +296,19 @@ component extends="BaseAdapter" {
 			sql &= " having " & arguments.having;
 		}
 
+		sql = applyOrderByAndMaxRowsSql( sql=sql, orderBy=arguments.orderBy, maxRows=arguments.maxRows, startRow=arguments.startRow );
+
+		return sql;
+	}
+
+	public string function applyOrderByAndMaxRowsSql( required string sql, string orderBy="", numeric maxRows=0, numeric startRow=1 ) {
+		var sql = arguments.sql;
 		if ( Len( Trim ( arguments.orderBy ) ) ) {
 			sql &= " order by " & arguments.orderBy;
 		}
-
 		if ( arguments.maxRows ) {
 			sql &= " limit " & arguments.maxRows & " offset " & arguments.startRow-1;
 		}
-
 		return sql;
 	}
 

@@ -260,7 +260,7 @@ component {
 	}
 
 	public string function getDefaultOperationsForObject( required string objectName ) {
-		var defaults = [ "read", "add", "edit", "batchedit", "delete", "batchdelete" ];
+		var defaults = [ "navigate", "read", "add", "edit", "batchedit", "delete", "batchdelete" ];
 
 		if ( _getPresideObjectService().objectIsVersioned( arguments.objectName ) ) {
 			defaults.append( "viewversions" );
@@ -409,6 +409,8 @@ component {
 		,          array   searchFields   = listSearchFields( arguments.objectName )
 		,          boolean treeView       = false
 		,          string  treeViewParent = ""
+		,          boolean distinct       = false
+		,          boolean forceDistinct  = false
 	) {
 
 		var result = { totalRecords = 0, records = "" };
@@ -422,6 +424,21 @@ component {
 		args.delete( "gridFields"   );
 		args.delete( "searchQuery"  );
 		args.delete( "searchFields" );
+
+
+		if ( args.distinct && !args.forceDistinct && $isFeatureEnabled( "useDistinctForDatatables" ) ) {
+			args.distinct = false;
+			for ( var extraFilter in args.extraFilters ) {
+				for ( var extraJoin in extraFilter.extraJoins ?: [] ) {
+					if ( Len( extraJoin.subQuery ?: "" ) ) {
+						args.distinct = true;
+						break;
+					}
+				}
+
+				if ( args.distinct ) { break; }
+			}
+		}
 
 		if ( Len( Trim( arguments.searchQuery ) ) ) {
 			args.extraFilters.append(
@@ -474,8 +491,10 @@ component {
 			result.totalRecords = result.records.recordCount;
 		} else if ( dbAdapter.supportsCountOverWindowFunction() ) {
 			result.totalRecords = result.records.recordCount ? result.records._total_recordcount : 0;
+		} else if ( Len( args.groupBy ?: "" ) ) {
+			result.totalRecords = _getPresideObjectService().selectData( argumentCollection=args, recordCountOnly=true, maxRows=0, startRow=1 );
 		} else {
-			result.totalRecords = _getPresideObjectService().selectData( argumentCollection=args, recordCountOnly=true, maxRows=0 );
+			result.totalRecords = _getPresideObjectService().selectData( argumentCollection=args, selectFields=[], recordCountOnly=true, maxRows=0, startRow=1 );
 		}
 
 		return result;

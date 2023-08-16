@@ -37,6 +37,14 @@ component {
 
 		_setupMappings( argumentCollection=arguments );
 		_setupDefaultTagAttributes();
+
+		request._sessionSettings = {
+			  statelessRequest         = this.statelessRequest
+			, presideSessionManagement = this.presideSessionManagement
+			, sessionManagement        = this.sessionManagement
+			, sessionTimeout           = this.sessionTimeout
+			, sessionType              = _getSessionType()
+		};
 	}
 
 // APPLICATION LIFECYCLE EVENTS
@@ -112,10 +120,16 @@ component {
 			return;
 		}
 
+		if ( this.presideSessionManagement ) {
+			_persistSession();
+			_removeSessionCookies();
+		} else {
+			_invalidateSessionIfNotUsed();
+		}
+		_cleanupCookies();
+
 		if ( _showErrors() ) {
 			throw object=arguments.exception;
-
-
 		} else {
 			_friendlyError( arguments.exception, 500 );
 
@@ -185,6 +199,7 @@ component {
 				setting requesttimeout=requestTimeout;
 
 				request._isPresideReloadRequest = true;
+				request._loadingStartTime = GetTickCount();
 				_isReloading( true );
 
 				SystemOutput( "Preside System Output (#( this.PRESIDE_APPLICATION_ID ?: ( this.name ?: "" ))#) [#DateTimeFormat( Now(), 'yyyy-mm-dd HH:nn:ss' )#]: Application starting up (fwreinit called, or application starting for the first time)." & Chr( 13 ) & Chr( 10 ) );
@@ -202,7 +217,9 @@ component {
 				_announceInterception( "postPresideReload" );
 
 				_isReloading( false );
-				SystemOutput( "Preside System Output (#( this.PRESIDE_APPLICATION_ID ?: ( this.name ?: "" ))#) [#DateTimeFormat( Now(), 'yyyy-mm-dd HH:nn:ss' )#]: Application start up complete" & Chr( 13 ) & Chr( 10 ) );
+
+				var timeTakenInSecs = ( GetTickCount() - request._loadingStartTime ) / 1000;
+				SystemOutput( "Preside System Output (#( this.PRESIDE_APPLICATION_ID ?: ( this.name ?: "" ))#) [#DateTimeFormat( Now(), 'yyyy-mm-dd HH:nn:ss' )#]: Application start up complete in #NumberFormat( timeTakenInSecs )# seconds" & Chr( 13 ) & Chr( 10 ) );
 			}
 		} catch( any e ) {
 			if ( ( e.lockOperation ?: "" ) == "Timeout" ) {
@@ -466,19 +483,16 @@ component {
 	}
 
 	private void function _preventSessionFixation() {
-		var appSettings = getApplicationSettings();
-
-		if ( ( appSettings.sessionType ?: "cfml" ) != "j2ee" ) {
+		if ( _getSessionType() != "j2ee" ) {
 			SessionRotate();
 		}
 	}
 
 	private void function _invalidateSessionIfNotUsed() {
-		var applicationSettings  = getApplicationSettings();
 		var sessionIsUsed        = false;
 		var ignoreKeys           = [ "cfid", "timecreated", "sessionid", "urltoken", "lastvisit", "cftoken" ];
 		var keysToBeEmptyStructs = [ "cbStorage", "cbox_flash_scope" ];
-		var sessionsEnabled      = IsBoolean( applicationSettings.sessionManagement ) && applicationSettings.sessionManagement;
+		var sessionsEnabled      = IsBoolean( request._sessionSettings.sessionManagement ) && request._sessionSettings.sessionManagement;
 		if ( sessionsEnabled ) {
 			for( var key in session ) {
 				if ( ignoreKeys.findNoCase( key ) ) {
@@ -878,5 +892,18 @@ component {
 		}
 
 		return;
+	}
+
+	private string function _getSessionType() {
+		if ( !Len( application._sessionType ?: "" ) ) {
+			var appSettings = getApplicationSettings( true );
+			application._sessionType = appSettings.sessionType ?: "cfml";
+
+			if ( !Len( application._sessionType ) ) {
+				application._sessionType = "cfml";
+			}
+		}
+
+		return application._sessionType;
 	}
 }

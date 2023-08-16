@@ -509,6 +509,7 @@ component {
 			, orderBy            = "_hierarchy_sort_order"
 			, selectFields       = arguments.selectFields
 			, allowDraftVersions = arguments.allowDrafts
+			, fromVersionTable   = false
 			, filter             = {
 				  _hierarchy_depth = 0
 				, active           = true
@@ -844,7 +845,7 @@ component {
 				, versionNumber           = versionNumber
 				, updateManyToManyRecords = true
 				, forceVersionCreation    = arguments.forceVersionCreation ?: ( pageDataHasChanged || pageTypeDataHasChanged )
-				, isDraft                 = arguments.isDraft
+				, isDraft                 = ( pageDataHasChanged || pageTypeDataHasChanged ) ? arguments.isDraft : false
 			);
 
 			if ( _getPageTypesService().pageTypeExists( existingPage.page_type ) ) {
@@ -855,7 +856,7 @@ component {
 						, versionNumber           = versionNumber
 						, updateManyToManyRecords = true
 						, forceVersionCreation    = arguments.forceVersionCreation ?: ( pageDataHasChanged || pageTypeDataHasChanged )
-						, isDraft                 = arguments.isDraft
+						, isDraft                 = ( pageDataHasChanged || pageTypeDataHasChanged ) ? arguments.isDraft : false
 						, useVersioning           = !arguments.skipVersioning
 					);
 				} else {
@@ -1021,7 +1022,7 @@ component {
 
 		if ( arguments.cloneChildren ) {
 			var children = _getPObj().selectData(
-				  selectFields  = [ "id" ]
+				  selectFields  = [ "id", "page_type" ]
 				, filter        = { parent_page=arguments.sourcePageId, trashed=false }
 				, bypassTenants = bypassTenants
 				, orderBy       = "sort_order"
@@ -1032,6 +1033,10 @@ component {
 				childPageData.site = newPageData.site;
 			}
 			for( var child in children ) {
+				if ( _getPageTypesService().isSystemPageType( pageTypeId=child.page_type ) ) {
+					continue;
+				}
+
 				clonePage(
 					  sourcePageId   = child.id
 					, newPageData    = childPageData

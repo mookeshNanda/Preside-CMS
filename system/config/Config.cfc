@@ -286,6 +286,7 @@ component {
 		interceptorSettings.customInterceptionPoints.append( "postRulesForField"                     );
 		interceptorSettings.customInterceptionPoints.append( "preRenderDataManagerObjectInfoCard"    );
 		interceptorSettings.customInterceptionPoints.append( "preRenderDataManagerObjectTabs"        );
+		interceptorSettings.customInterceptionPoints.append( "postPrepareDevToolsVersions"           );
 	}
 
 	private void function __setupCachebox() {
@@ -306,14 +307,19 @@ component {
 					  class      = 'coldbox.system.logging.appenders.RollingFileAppender'
 					, properties = { filePath=settings.logsMapping, filename="coldbox.log", async=true }
 				},
-				taskmanagerRequestAppender = {
-					  class      = 'preside.system.services.logger.TaskmanagerLogAppender'
+				taskManagerRequestAppender = {
+					  class      = 'preside.system.services.logger.TaskManagerLogAppender'
 					, properties = { logName="TASKMANAGER" }
+				},
+				adhocTaskManagerAppender = {
+					  class      = 'preside.system.services.logger.AdhocTaskManagerLogAppender'
+					, properties = { logName="ADHOCTASKMANAGER" }
 				}
 			},
 			root = { appenders='defaultLogAppender', levelMin='FATAL', levelMax='WARN' },
 			categories = {
-				taskmanager = { appenders='taskmanagerRequestAppender', levelMin='FATAL', levelMax='INFO' }
+				taskManager      = { appenders='taskManagerRequestAppender', levelMin='FATAL', levelMax='INFO' },
+				adhocTaskManager = { appenders='adhocTaskmanagerAppender'  , levelMin='FATAL', levelMax='INFO' }
 			}
 		};
 	}
@@ -654,7 +660,7 @@ component {
 			, systemInformation      = [ "navigate" ]
 			, urlRedirects           = [ "navigate", "read", "addRule", "editRule", "deleteRule" ]
 			, formbuilder            = [ "navigate", "addform", "editform", "deleteForm" ,"lockForm", "activateForm", "deleteSubmissions", "editformactions" ]
-			, formquestions          = [ "navigate", "read", "add", "edit", "delete", "batchdelete", "batchedit", "clone" ]
+			, formquestions          = [ "navigate", "read", "add", "edit", "delete", "batchdelete", "batchedit", "clone", "managefilters", "usefilters" ]
 			, taskmanager            = [ "navigate", "run", "toggleactive", "viewlogs", "configure" ]
 			, adhocTaskManager       = [ "navigate", "viewtask", "canceltask" ]
 			, savedExport            = [ "navigate", "read", "add", "edit", "delete" ]
@@ -726,6 +732,12 @@ component {
 		settings.autoRestoreDeprecatedFields = true;
 		settings.useQueryCacheDefault        = true;
 		settings.mssql = { useVarcharMaxForText = false }
+
+		settings.queryTimeout = {
+			  default                 = Val( settings.env.QUERY_TIMEOUT ?: 0 )
+			, backgroundThreadDefault = Val( settings.env.BACKGROUND_QUERY_TIMEOUT ?: ( settings.env.QUERY_TIMEOUT ?: 0 ) )
+			, datamanagerRowCount     = Val( settings.env.DATAMANAGER_ROWCOUNT_QUERY_TIMEOUT ?: ( settings.env.QUERY_TIMEOUT ?: 3 ) )
+		};
 	}
 
 	private void function __setupGlobalDataFilters() {
@@ -786,6 +798,10 @@ component {
 				, trash     = ( settings.env[ "assetmanager.storage.trash"     ] ?: settings.uploads_directory & "/.trash" )
 				, publicUrl = ( settings.env[ "assetmanager.storage.publicUrl" ] ?: "" )
 			  }
+			, cacheExpiry = {
+				  public  = Val( settings.env.ASSET_CACHE_EXPIRY_PUBLIC  ?: 31536000 ) // one year
+				, private = Val( settings.env.ASSET_CACHE_EXPIRY_PRIVATE ?: 86400    ) // one day
+			  }
 		};
 		settings.assetManager.allowedExtensions = _typesToExtensions( settings.assetManager.types );
 		settings.assetManager.types.document.append( { tiff = { serveAsAttachment = true, mimeType="image/tiff" } } );
@@ -803,6 +819,8 @@ component {
 
 	private void function __setupEmailCenter() {
 		settings.email = _getEmailSettings(); // seems silly, but need to keep this for backward compat
+		settings.email.smtp = {};
+		settings.email.smtp.async = IsBoolean( settings.env.SMTP_ASYNC ?: "" ) ? settings.env.SMTP_ASYNC : true;
 	}
 
 	private void function __setupRicheditor() {
@@ -959,7 +977,8 @@ component {
 		};
 
 		settings.csrf = {
-			tokenExpiryInSeconds = 1200
+			  tokenExpiryInSeconds      = 1200
+			, authenticatedSessionsOnly = IsBoolean( settings.env.CSRF_AUTHENTICATED_ONLY ?: "" ) && settings.env.CSRF_AUTHENTICATED_ONLY
 		};
 	}
 
@@ -1001,6 +1020,8 @@ component {
 	private void function __setupDataExport() {
 		settings.dataExport = {};
 		settings.dataExport.csv = { delimiter="," };
+
+		settings.dataExport.defaults = { excludeFields=[] };
 	}
 
 	private void function __setupFullPageCaching() {

@@ -26,6 +26,8 @@ component displayName="Preside Object Service" {
 	 * @interceptorService.inject     coldbox:InterceptorService
 	 * @reloadDb.inject               coldbox:setting:syncDb
 	 * @throwOnLongTableName.inject   coldbox:setting:throwOnLongTableName
+	 * @defaultQueryTimeout.inject    coldbox:setting:queryTimeout.default
+	 * @defaultBgQueryTimeout.inject  coldbox:setting:queryTimeout.backgroundThreadDefault
 	 */
 	public any function init(
 		  required array   objectDirectories
@@ -41,8 +43,10 @@ component displayName="Preside Object Service" {
 		, required any     selectDataViewService
 		, required any     defaultQueryCache
 		, required any     interceptorService
-		,          boolean reloadDb = true
-		,          boolean throwOnLongTableName = false
+		,          boolean reloadDb              = true
+		,          boolean throwOnLongTableName  = false
+		,          numeric defaultQueryTimeout   = 0
+		,          numeric defaultBgQueryTimeout = 0
 	) {
 		_setObjectDirectories( arguments.objectDirectories );
 		_setObjectReader( arguments.objectReader );
@@ -59,17 +63,22 @@ component displayName="Preside Object Service" {
 		_setInterceptorService( arguments.interceptorService );
 		_setThrowOnLongTableName( arguments.throwOnLongTableName );
 		_setInstanceId( CreateObject('java','java.lang.System').identityHashCode( this ) );
+		_setDefaultQueryTimeout( arguments.defaultQueryTimeout   );
+		_setDefaultBgQueryTimeout( arguments.defaultBgQueryTimeout );
+		_setReloadDb( arguments.reloadDb );
 
+		return this;
+	}
+
+	public void function postInit() {
 		_loadObjects();
 
-		if ( arguments.reloadDb ) {
+		if ( _getReloadDb() ) {
 			dbSync();
 		}
 
 		_setSimpleLocalCache({});
 		_setCacheMap({});
-
-		return this;
 	}
 
 // PUBLIC API METHODS
@@ -163,6 +172,7 @@ component displayName="Preside Object Service" {
 	 * @bypassTenants.hint           Array of tenants to bypass. e.g. [ "site" ] to bypass site tenancy. See [[data-tenancy]] for more information on tenancy.
 	 * @returntype.hint              Either query (default),array,struct,arrayOfValues,singleRecordStruct or singleValue. Array and struct correspond to https://docs.lucee.org/reference/tags/query.html#attribute-returntype. ArrayOfValues return column array of the specified column in columnKey. SingleRecordStruct returns the first record in the result as a struct. SingleValue returns first result value of the specified column.
 	 * @columnKey.hint               When returntype="struct", "arrayOfValues" or "singleValue", this field is required to define the column that will be used for struct keys/values/value
+	 * @timeout.hint                 Timeout, in seconds, of the main select DB query
 	 * @selectFields.docdefault      []
 	 * @filter.docdefault            {}
 	 * @filterParams.docdefault      {}
@@ -203,6 +213,7 @@ component displayName="Preside Object Service" {
 		,          array   ignoreDefaultFilters    = []
 		,          string  returntype              = "query"
 		,          string  columnKey               = ""
+		,          numeric timeout                 = _getDefaultTimeout()
 	) autodoc=true {
 		var args = _addDefaultFilters( _cleanupPropertyAliases( argumentCollection=_deepishDuplicate( arguments ) ) );
 		var interceptorResult = _announceInterception( "preSelectObjectData", args );
@@ -290,6 +301,7 @@ component displayName="Preside Object Service" {
 					, params     = versionTablePrep.params
 					, returntype = sqlRunnerReturnType
 					, columnKey  = args.columnKey
+					, timeout    = args.timeout
 				);
 
 				if ( arguments.recordCountOnly ) {
@@ -333,6 +345,7 @@ component displayName="Preside Object Service" {
 				, params     = args.preparedFilter.params
 				, returntype = sqlRunnerReturnType
 				, columnKey  = args.columnKey
+				, timeout    = args.timeout
 			);
 			if ( arguments.recordCountOnly ) {
 				args.result = Val( args.result.record_count ?: "" );
@@ -488,6 +501,7 @@ component displayName="Preside Object Service" {
 	 * @versionNumber.hint           If using versioning, specify a version number to save against (if none specified, one will be created automatically)
 	 * @bypassTenants.hint           Array of tenants to ignore (i.e. when the insert data wants to create a record in an alternative tenant to the current one)
 	 * @clearCaches.hint             Whether or not to clear caches related to the object whose record you are creating
+	 * @timeout.hint                 Timeout, in seconds, of the main insert DB query
 	 * @useVersioning.docdefault     automatic
 	 * @clearCaches.docdefault       Defaults to whether query caching is enabled or not for this object
 	 */
@@ -500,6 +514,7 @@ component displayName="Preside Object Service" {
 		,          numeric versionNumber           = 0
 		,          array   bypassTenants           = []
 		,          boolean clearCaches             = _objectUsesCaching( arguments.objectName )
+		,          numeric timeout                 = _getDefaultTimeout()
 
 	) autodoc=true {
 		var interceptorResult = _announceInterception( "preInsertObjectData", arguments );
@@ -578,7 +593,7 @@ component displayName="Preside Object Service" {
 				, dbAdapter         = adapter
 			);
 
-			result = _runSql( sql=sql[1], dsn=obj.dsn, params=params, returnType=adapter.getInsertReturnType() );
+			result = _runSql( sql=sql[1], dsn=obj.dsn, params=params, returnType=adapter.getInsertReturnType(), timeout=args.timeout );
 
 			if ( adapter.requiresManualCommitForTransactions() ){
 				_runSql( sql='commit', dsn=obj.dsn );
@@ -650,6 +665,7 @@ component displayName="Preside Object Service" {
 	 * @selectDataArgs.hint    Struct of arguments that are valid to pass to the [[presideobjectservice-selectdata]] method
 	 * @fieldList.hint         Array of table field names that the select fields in the select statement should map to for the insert
 	 * @clearCaches.hint       Whether or not to clear caches related to the object whose record you are creating
+	 * @timeout.hint           Timeout, in seconds, of the insert query
 	 * @clearCaches.docdefault Defaults to whether query caching is enabled or not for this object
 	 */
 	public numeric function insertDataFromSelect(
@@ -657,6 +673,7 @@ component displayName="Preside Object Service" {
 		, required struct  selectDataArgs
 		, required array   fieldList
 		,          boolean clearCaches = _objectUsesCaching( arguments.objectName )
+		,          numeric timeout     = _getDefaultTimeout()
 	) {
 		var obj       = _getObject( arguments.objectName ).meta;
 		var adapter   = _getAdapter( obj.dsn );
@@ -672,6 +689,7 @@ component displayName="Preside Object Service" {
 			, dsn        = obj.dsn
 			, params     = selectSql.params
 			, returnType = "info"
+			, timeout    = arguments.timeout
 		);
 
 		if ( arguments.clearCaches ) {
@@ -729,6 +747,7 @@ component displayName="Preside Object Service" {
 	 * @versionNumber.hint              If using versioning, specify a version number to save against (if none specified, one will be created automatically)
 	 * @setDateModified.hint            If true (default), updateData will automatically set the datelastmodified date on your record to the current date/time
 	 * @clearCaches.hint                Whether or not to clear caches related to the object whose record you are updating
+	 * @timeout.hint                    Timeout, in seconds, of the main update DB query
 	 * @useVersioning.docdefault        auto
 	 * @clearCaches.docdefault          Defaults to whether query caching is enabled or not for this object
 	 * @calculateChangedData.docdefault If true (default false), updateData will calculate the changed data even if requiresVersioning is false
@@ -752,6 +771,7 @@ component displayName="Preside Object Service" {
 		,          boolean clearCaches             = _objectUsesCaching( arguments.objectName )
 		,          boolean calculateChangedData    = false
 		,          struct  changedData             = {}
+		,          numeric timeout                 = _getDefaultTimeout()
 	) autodoc=true {
 		var interceptorResult = _announceInterception( "preUpdateObjectData", arguments );
 
@@ -921,13 +941,13 @@ component displayName="Preside Object Service" {
 
 		if ( structCount( cleanedData ) ) {
 			sql = adapter.getUpdateSql(
-				tableName     = obj.tableName
+				  tableName     = obj.tableName
 				, tableAlias    = arguments.objectName
 				, updateColumns = StructKeyArray( cleanedData )
 				, filter        = preparedFilter.filter
 				, joins         = joins
 			);
-			result = _runSql( sql=sql, dsn=obj.dsn, params=preparedFilter.params, returnType="info" );
+			result = _runSql( sql=sql, dsn=obj.dsn, params=preparedFilter.params, returnType="info", timeout=arguments.timeout );
 		}
 		var updatedRecordCount = Val( result.recordCount ?: 0 );
 
@@ -1042,6 +1062,7 @@ component displayName="Preside Object Service" {
 	 * @extraFilters.hint      An array of extra sets of filters. Each array should contain a structure with :code:`filter` and optional `code:`filterParams` keys.
 	 * @forceDeleteAll.hint    If no id or filter supplied, this must be set to **true** in order for the delete to process
  	 * @clearCaches.hint       Whether or not to clear caches related to the object whose record you are deleting
+ 	 * @timeout.hint           Timeout, in seconds, of the main delete DB query
 	 * @clearCaches.docdefault Defaults to whether query caching is enabled or not for this object
 	 */
 	public numeric function deleteData(
@@ -1055,6 +1076,7 @@ component displayName="Preside Object Service" {
 		,          string  forceJoins       = ""
 		,          boolean fromVersionTable = false
 		,          boolean clearCaches      = _objectUsesCaching( arguments.objectName )
+		,          numeric timeout          = _getDefaultTimeout()
 	) autodoc=true {
 		var interceptorResult = _announceInterception( "preDeleteObjectData", arguments );
 
@@ -1093,7 +1115,7 @@ component displayName="Preside Object Service" {
 			, joins      = _convertObjectJoinsToTableJoins( argumentCollection=args )
 		);
 
-		result = _runSql( sql=sql, dsn=obj.dsn, params=args.preparedFilter.params, returnType="info" );
+		result = _runSql( sql=sql, dsn=obj.dsn, params=args.preparedFilter.params, returnType="info", timeout=args.timeout );
 
 		if ( arguments.clearCaches && Val( result.recordCount ?: 0 ) ) {
 			clearRelatedCaches(
@@ -2202,6 +2224,7 @@ component displayName="Preside Object Service" {
 		switch( arguments.dbType ){
 			case "text":
 			case "longtext":
+			case "mediumtext":
 			case "clob":
 				return "richeditor";
 			case "date":
@@ -2458,6 +2481,10 @@ component displayName="Preside Object Service" {
 					ArrayDeleteAt( arguments.selectFields, i );
 				}
 			}
+		}
+
+		if ( ArrayIsEmpty( arguments.selectFields ) ) {
+			ArrayAppend( arguments.selectFields, getIdField( arguments.objectName ) );
 		}
 
 		return arguments.selectFields;
@@ -4230,6 +4257,13 @@ component displayName="Preside Object Service" {
 		return ReFindNoCase( nofunctionBracketsAndSpaces, fieldMinusAlias );
 	}
 
+	private numeric function _getDefaultTimeout() {
+		if ( StructKeyExists( request, "__isbgthread" ) && IsBoolean( request.__isbgthread ) && request.__isbgthread ) {
+			return _getDefaultBgQueryTimeout();
+		}
+		return _getDefaultQueryTimeout();
+	}
+
 
 // SIMPLE PRIVATE PROXIES
 	private any function _getAdapter() {
@@ -4405,5 +4439,26 @@ component displayName="Preside Object Service" {
 	}
 	private void function _setSelectDataViewService( required any selectDataViewService ) {
 	    _selectDataViewService = arguments.selectDataViewService;
+	}
+
+	private numeric function _getDefaultQueryTimeout() {
+		return _defaultQueryTimeout;
+	}
+	private void function _setDefaultQueryTimeout( required numeric defaultQueryTimeout ) {
+		_defaultQueryTimeout = arguments.defaultQueryTimeout;
+	}
+
+	private numeric function _getDefaultBgQueryTimeout() {
+		return _defaultBgQueryTimeout;
+	}
+	private void function _setDefaultBgQueryTimeout( required numeric defaultBgQueryTimeout ) {
+		_defaultBgQueryTimeout = arguments.defaultBgQueryTimeout;
+	}
+
+	private boolean function _getReloadDb() {
+	    return _reloadDb;
+	}
+	private void function _setReloadDb( required boolean reloadDb ) {
+	    _reloadDb = arguments.reloadDb;
 	}
 }

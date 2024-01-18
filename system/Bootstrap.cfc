@@ -240,8 +240,8 @@ component {
 
 	private void function _clearExistingApplication() {
 		onApplicationEnd( application );
-		application.clear();
-		request.delete( "cb_requestcontext" );
+		StructClear( application );
+		StructDelete( request, "cb_requestcontext" );
 		SystemCacheClear( "template" );
 
 		if ( ( server.coldfusion.productName ?: "" ) == "Lucee" ) {
@@ -423,7 +423,7 @@ component {
 	private boolean function _dealWithSqlReloadProtectionErrors( required struct exception ) output=true {
 		var exceptionType = ( arguments.exception.type ?: "" );
 
-		if ( exceptionType == "presidecms.auto.schema.sync.disabled" ) {
+		if ( IsSimpleValue( exceptionType ) && exceptionType == "presidecms.auto.schema.sync.disabled" ) {
 			thread name=CreateUUId() e=arguments.exception {
 				new preside.system.services.errors.ErrorLogService(
 					  appMapping     = request._presideMappings.appMapping ?: "/app"

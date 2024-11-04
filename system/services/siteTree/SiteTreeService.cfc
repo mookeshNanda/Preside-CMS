@@ -1,6 +1,7 @@
 /**
- * @singleton
- * @presideservice
+ * @singleton      true
+ * @presideservice true
+ * @feature        sitetree
  *
  */
 component {
@@ -14,10 +15,10 @@ component {
 	 * @coldboxController.inject           coldbox
 	 * @presideObjectService.inject        presideObjectService
 	 * @versioningService.inject           versioningService
-	 * @websitePermissionService.inject    websitePermissionService
+	 * @websitePermissionService.inject    featureInjector:websiteUsers:websitePermissionService
 	 * @rulesEngineConditionService.inject rulesEngineConditionService
 	 * @cloningService.inject              presideObjectCloningService
-	 * @pageCache.inject                   cachebox:PresidePageCache
+	 * @cachebox.inject                    cachebox
 	 */
 	public any function init(
 		  required any loginService
@@ -30,7 +31,7 @@ component {
 		, required any websitePermissionService
 		, required any rulesEngineConditionService
 		, required any cloningService
-		, required any pageCache
+		, required any cachebox
 	) {
 		_setLoginService( arguments.loginService );
 		_setPageTypesService( arguments.pageTypesService );
@@ -42,7 +43,7 @@ component {
 		_setWebsitePermissionService( arguments.websitePermissionService );
 		_setRulesEngineConditionService( arguments.rulesEngineConditionService );
 		_setCloningService( arguments.cloningService );
-		_setPageCache( arguments.pageCache );
+		_setCachebox( arguments.cachebox );
 		_setPageSlugsAreMultilingual();
 
 		if ( $isFeatureEnabled( "sitetree" ) ) {
@@ -372,15 +373,16 @@ component {
 
 	public query function getDescendants(
 		  required string  id
-		,          numeric depth        = 0
-		,          array   selectFields = []
-		,          boolean allowDrafts  = $getRequestContext().showNonLiveContent()
+		,          numeric depth         = 0
+		,          array   selectFields  = []
+		,          boolean allowDrafts   = $getRequestContext().showNonLiveContent()
+		,          boolean includeHidden = false
 	) {
 		var page = getPage( id = arguments.id, selectField = [ "_hierarchy_child_selector", "_hierarchy_depth" ], allowDrafts=arguments.allowDrafts );
 		var args = "";
 
 		if ( page.recordCount ) {
-			var allowedPageTypes = _getPageTypesService().listSiteTreePageTypes();
+			var allowedPageTypes = _getPageTypesService().listSiteTreePageTypes( includeHidden=arguments.includeHidden );
 
 			args = {
 				  filter             = "_hierarchy_lineage like :_hierarchy_lineage and page_type in ( :page_type )"
@@ -612,8 +614,10 @@ component {
 				    fetchChildren = fetchChildren && !Val( child.exclude_children_from_navigation );
 				    fetchChildren = fetchChildren && ( expandAllSiblings || activeTree.find( child.id ) );
 
-				if (  fetchChildren  ) {
-					child.children = getNavChildren( child.id, currentDepth+1, getManagedChildTypesForParentType( child.page_type ) );
+				if ( fetchChildren ) {
+					if ( _getPageTypesService().pageTypeExists( child.page_type ) ) {
+						child.children = getNavChildren( child.id, currentDepth+1, getManagedChildTypesForParentType( child.page_type ) );
+					}
 				}
 
 				var page = {
@@ -850,7 +854,7 @@ component {
 				, versionNumber           = versionNumber
 				, updateManyToManyRecords = true
 				, forceVersionCreation    = arguments.forceVersionCreation ?: ( pageDataHasChanged || pageTypeDataHasChanged )
-				, isDraft                 = ( pageDataHasChanged || pageTypeDataHasChanged ) ? arguments.isDraft : false
+				, isDraft                 = ( arguments.isDraft || pageDataHasChanged || pageTypeDataHasChanged ) ? arguments.isDraft : false
 			);
 
 			if ( _getPageTypesService().pageTypeExists( existingPage.page_type ) ) {
@@ -861,7 +865,7 @@ component {
 						, versionNumber           = versionNumber
 						, updateManyToManyRecords = true
 						, forceVersionCreation    = arguments.forceVersionCreation ?: ( pageDataHasChanged || pageTypeDataHasChanged )
-						, isDraft                 = ( pageDataHasChanged || pageTypeDataHasChanged ) ? arguments.isDraft : false
+						, isDraft                 = ( arguments.isDraft || pageDataHasChanged || pageTypeDataHasChanged ) ? arguments.isDraft : false
 						, useVersioning           = !arguments.skipVersioning
 					);
 				} else {
@@ -1357,17 +1361,32 @@ component {
 		return page.id ?: "";
 	}
 
-	public void function clearPageCache( required string pageId ) {
-		var pageUrl    = ReReplace( $getRequestContext().buildLink( page=arguments.pageId ), "^https?://.*?/", "/" );
+	public void function clearAllCaches() {
+		_getCachebox().clearAll();
+		$announceInterception( "onClearCaches", {} );
+	}
+
+	public void function clearPageCache( string pageId="", string pageUrl="" ) {
+		var pageUrl    = ReReplace( Len( arguments.pageId ) ? $getRequestContext().buildLink( page=arguments.pageId ) : arguments.pageUrl, "^https?://.*?/", "/" );
 		var sectionUrl = ReReplace( pageUrl, "\.html$", "/" );
 
-		_getPageCache().clearByKeySnippet( pageUrl );
-		_getPageCache().clearByKeySnippet( sectionUrl );
+		if ( Len( pageUrl ) ) {
+			_getCachebox().getCache( "PresidePageCache" ).clearByKeySnippet( pageUrl );
+			_getCachebox().getCache( "PresidePageCache" ).clearByKeySnippet( sectionUrl );
 
-		$announceInterception( "onClearPageCaches", {
-			  pageUrl    = pageUrl
-			, sectionUrl = sectionUrl
-		} );
+			$announceInterception( "onClearPageCaches", {
+				  pageUrl    = pageUrl
+				, sectionUrl = sectionUrl
+			} );
+		}
+	}
+
+	public void function clearPageTypeCaches( required array pageTypes=[] ) {
+		var pages = _getPObj().selectData( selectFields=[ "id" ], filter={ page_type=arguments.pageTypes } );
+
+		for ( var page in pages ) {
+			clearPageCache( pageId=page.id );
+		}
 	}
 
 // PRIVATE HELPERS
@@ -1821,11 +1840,11 @@ component {
 		_cloningService = arguments.cloningService;
 	}
 
-	private any function _getPageCache() {
-		return _pageCache;
+	private any function _getCachebox() {
+		return _cachebox;
 	}
-	private void function _setPageCache( required any pageCache ) {
-		_pageCache = arguments.pageCache;
+	private void function _setCachebox( required any cachebox ) {
+		_cachebox = arguments.cachebox;
 	}
 
 	private void function _setPageSlugsAreMultilingual() {

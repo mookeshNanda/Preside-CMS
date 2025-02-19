@@ -290,6 +290,7 @@ component {
 		interceptorSettings.customInterceptionPoints.append( "postGetExtraEditRecordActionButtons"   );
 		interceptorSettings.customInterceptionPoints.append( "postExtraTopRightButtonsForEditRecord" );
 		interceptorSettings.customInterceptionPoints.append( "postGetExtraCloneRecordActionButtons"  );
+		interceptorSettings.customInterceptionPoints.append( "postGetExtraSortRecordsActionButtons"  );
 		interceptorSettings.customInterceptionPoints.append( "postExtraTopRightButtons"              );
 		interceptorSettings.customInterceptionPoints.append( "preValidateForm"		                 );
 		interceptorSettings.customInterceptionPoints.append( "preRenderLabelSelectData"		         );
@@ -303,6 +304,8 @@ component {
 		interceptorSettings.customInterceptionPoints.append( "postRenderDelayedViewlets"             );
 		interceptorSettings.customInterceptionPoints.append( "preRunCustomization"                   );
 		interceptorSettings.customInterceptionPoints.append( "postRunCustomization"                  );
+		interceptorSettings.customInterceptionPoints.append( "onEmailTemplateGetAdditionalQueryStringForBuildAjaxListingLink" );
+		interceptorSettings.customInterceptionPoints.append( "onEmailTemplatePreFetchRecordsForGridListing" );
 	}
 
 	private void function __setupCachebox() {
@@ -918,7 +921,7 @@ component {
 			, batchOperationSelectAll         = { enabled=true , siteTemplates=[ "*" ], widgets=[]                      , dependsOn=[ "admin" ] }
 			, useDistinctForDatatables        = { enabled=true , siteTemplates=[ "*" ], widgets=[]                      , dependsOn=[ "admin" ] }
 			, systemConfiguration             = { enabled=true , siteTemplates=[ "*" ], widgets=[]                      , dependsOn=[ "admin" ] }
-			, cmsUserManager                  = { enabled=true , siteTemplates=[ "*" ], widgets=[]                      , dependsOn=[ "cms"   ] }
+			, cmsUserManager                  = { enabled=true , siteTemplates=[ "*" ], widgets=[]                      , dependsOn=[ "admin" ] }
 			, errorLogs                       = { enabled=true , siteTemplates=[ "*" ], widgets=[]                      , dependsOn=[ "admin" ] }
 			, redirectErrorPages              = { enabled=false, siteTemplates=[ "*" ], widgets=[]                      , dependsOn=[ "cms"   ] }
 			, auditTrail                      = { enabled=true , siteTemplates=[ "*" ], widgets=[]                      , dependsOn=[ "admin" ] }
@@ -926,7 +929,7 @@ component {
 			, passwordPolicyManager           = { enabled=true , siteTemplates=[ "*" ], widgets=[]                      , dependsOn=[ "admin" ] }
 			, formbuilder                     = { enabled=true , siteTemplates=[ "*" ], widgets=[ "formbuilderform" ]   , dependsOn=[ "cms" ] }
 			, formbuilder2                    = { enabled=false, siteTemplates=[ "*" ], widgets=[]                      , dependsOn=[ "formbuilder"   ] }
-			, multilingual                    = { enabled=false, siteTemplates=[ "*" ], widgets=[]                      , dependsOn=[ "cms"   ] }
+			, multilingual                    = { enabled=false, siteTemplates=[ "*" ], widgets=[] }
 			, dataexport                      = { enabled=false, siteTemplates=[ "*" ], widgets=[]                      , dependsOn=[ "datamanager"   ] }
 			, dataExporterNDJSON              = { enabled=false, siteTemplates=[ "*" ], widgets=[]                      , dependsOn=[ "dataexport"   ] }
 			, twoFactorAuthentication         = { enabled=true , siteTemplates=[ "*" ], widgets=[]                      , dependsOn=[ "admin"   ] }
@@ -1461,7 +1464,7 @@ component {
 			, filterObject           = "security_user"
 			, gridFields             = [ "known_as", "email_address" ]
 			, recipientIdLogProperty = "security_user_recipient"
-			, feature                = "cms"
+			, feature                = "admin"
 		};
 		recipientTypes.websiteUser = {
 			  parameters             = [ "display_name", "login_id", "email_address" ]
